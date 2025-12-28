@@ -65,22 +65,24 @@ libtudor_src = [
 ]
 
 driver_dll_names = [
-    'synaFpAdapter104.dll',
-    'synaWudfBioUsb104.dll'
+    'EgisTouchFPSensor0575.dll',
+    'EgisTouchFP0575.dll'
 ]
 
 add_global_arguments('-Wno-incompatible-pointer-types', language : 'c')
 
-driver_dlls = custom_target('driver-download', 
-    output: driver_dll_names,
-    input: ['download_driver.sh', 'installer.sha'],
-    command: [find_program('bash'), '@INPUT0@', '@INPUT1@', '@PRIVATE_DIR@', '@OUTDIR@'] + driver_dll_names
-)
+# Point to the local driver DLLs instead of downloading them.
+# This assumes you have placed your DLLs in a 'drivers' subdirectory.
+driver_dll_paths = []
+foreach dll_name : driver_dll_names
+  driver_dll_paths += join_paths('drivers', dll_name)
+endforeach
+driver_dlls = files(driver_dll_paths)
 
 driver_dll_blobs = generator(find_program('ld'),
     output: '@BASENAME@.o',
     arguments: ['-r', '-b', 'binary', '-o', '@OUTPUT@', '@INPUT@']
-).process([driver_dlls])
+).process(driver_dlls)
 
 libtudor_flags = []
 
