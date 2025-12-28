@@ -66,6 +66,7 @@ libtudor_src = [
 
 driver_dll_names = [
     'EgisTouchFPSensor0575.dll',
+    'EgisTouchFPEngine0575.dll',  # <--- Add this
     'EgisTouchFP0575.dll'
 ]
 
