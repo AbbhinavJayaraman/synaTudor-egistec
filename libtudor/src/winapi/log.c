@@ -200,3 +200,16 @@ __winfnc ULONG TraceMessage(HANDLE handle, ULONG flags, GUID *guid, USHORT num, 
     return ERROR_SUCCESS;
 }
 WINAPI(TraceMessage)
+
+/* --- ADD THIS TO THE END OF log.c --- */
+
+__winfnc void OutputDebugStringA(const char *lpOutputString) {
+    // Print driver logs to our console so we can see them!
+    printf("[Driver] %s\n", lpOutputString);
+}
+WINAPI(OutputDebugStringA)
+
+__winfnc void OutputDebugStringW(const void *lpOutputString) {
+    // Unicode version stub - harder to print, but prevents crash
+}
+WINAPI(OutputDebugStringW)

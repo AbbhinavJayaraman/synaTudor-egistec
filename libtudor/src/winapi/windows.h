@@ -33,8 +33,18 @@ typedef BYTE BOOLEAN;
 
 typedef DWORD HRESULT;
 typedef DWORD NTSTATUS;
+typedef LONG LSTATUS;
 
 typedef struct _HANDLE *HANDLE;
+typedef HANDLE HLOCAL; // <--- Add this line
+
+typedef union {
+    struct {
+        DWORD LowPart;
+        LONG HighPart;
+    };
+    LONGLONG QuadPart;
+} LARGE_INTEGER;
 
 typedef struct {
     uint32_t PartA;
@@ -48,8 +58,11 @@ typedef struct {
     .PartE = (((0x##e >> 40) & 0xff) <<  0) | (((0x##e >> 32) & 0xff) <<  8) | (((0x##e >> 24) & 0xff) << 16) | (((0x##e >> 16) & 0xff) << 24) | (((0x##e >>  8) & 0xff) << 32) | (((0x##e >>  0) & 0xff) << 40)\
 })
 
+
 enum {
     ERROR_SUCCESS = 0x0,
+    ERROR_FILE_NOT_FOUND = 0x2,   // <--- Add this
+    ERROR_INVALID_HANDLE = 0x6,   // <--- Add this
     ERROR_INSUFFICIENT_BUFFER = 0x7a,
     ERROR_IO_INCOMPLETE = 0x3e4,
     ERROR_IO_PENDING = 0x3e5,

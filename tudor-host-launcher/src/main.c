@@ -74,7 +74,7 @@ int main() {
     guint owner_id = g_bus_own_name_on_connection(dbus_con, TUDOR_HOST_LAUNCHER_SERVICE, G_BUS_NAME_OWNER_FLAGS_NONE, name_acquired, name_lost, loop, NULL);
 
     //Main loop
-    g_main_loop_run(loop);
+    g_main_loop_run(loop); //stuck in here 
 
     //Cleanup DBus
     g_bus_unown_name(owner_id);

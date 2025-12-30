@@ -33,6 +33,7 @@ static void *resolve_import(const char *lib, const char *name) {
 #ifdef DBGIMPORT
     return create_import_stub(lib, name);
 #else
+    log_error("MISSING IMPORT: %s@%s", name, lib);
     return &unresolved_stub;
 #endif
 }

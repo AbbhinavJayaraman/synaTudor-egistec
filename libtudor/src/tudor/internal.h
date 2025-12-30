@@ -47,25 +47,16 @@ struct windrv_dll {
     struct winmodule module;
     uint8_t *pe_image, *pe_image_end;
     struct dll_image image;
-    bool is_adapter, is_driver, is_engine;
+    bool is_adapter, is_driver, is_engine; // Added is_engine
 };
 
-#define NUM_WINDRV_DLLS 3 // <--- Change to 3
+#define NUM_WINDRV_DLLS 3 // Correctly updated to 3
 extern struct windrv_dll tudor_windrv_dlls[];
 
 #define WINBIO_CALL_PIPELINE(fnc, ...) if((hres = fnc(__VA_ARGS__)) != ERROR_SUCCESS) { log_error("Error in WINBIO pipeline function '%s': 0x%x!", #fnc, hres); return false; }
 
-struct windrv_dll {
-    struct winmodule module;
-    uint8_t *pe_image, *pe_image_end;
-    struct dll_image image;
-    bool is_adapter, is_driver, is_engine; // <--- Add is_engine
-};
-
-// ... existing externs ...
-extern struct windrv_dll *tudor_adapter_dll, *tudor_driver_dll, *tudor_engine_dll; // <--- Add *tudor_engine_dll
-
-extern struct windrv_dll *tudor_adapter_dll, *tudor_driver_dll;
+// External declarations for global pointers
+extern struct windrv_dll *tudor_adapter_dll, *tudor_driver_dll, *tudor_engine_dll;
 extern struct winwdf_driver *tudor_wdf_driver;
 extern WINBIO_SENSOR_INTERFACE *tudor_sensor_adapter;
 extern WINBIO_ENGINE_INTERFACE *tudor_engine_adapter;

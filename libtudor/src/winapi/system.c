@@ -88,3 +88,93 @@ __winfnc BOOL ConvertStringSecurityDescriptorToSecurityDescriptorW(const char16_
     return TRUE;
 }
 WINAPI(ConvertStringSecurityDescriptorToSecurityDescriptorW)
+
+/* --- ADD THIS TO THE END OF system.c --- */
+
+// --- Registry Stubs ---
+__winfnc LSTATUS RegOpenKeyA(HANDLE hKey, const char *lpSubKey, HANDLE *phkResult) {
+    return 2; // ERROR_FILE_NOT_FOUND
+}
+WINAPI(RegOpenKeyA)
+
+__winfnc LSTATUS RegQueryInfoKeyA(HANDLE hKey, char *lpClass, DWORD *lpcchClass, DWORD *lpReserved, DWORD *lpcSubKeys, DWORD *lpcbMaxSubKeyLen, DWORD *lpcbMaxClassLen, DWORD *lpcValues, DWORD *lpcbMaxValueNameLen, DWORD *lpcbMaxValueLen, DWORD *lpcbSecurityDescriptor, void *lpftLastWriteTime) {
+    return 2; // ERROR_FILE_NOT_FOUND
+}
+WINAPI(RegQueryInfoKeyA)
+
+
+// --- SetupAPI Stubs (Device Enumeration) ---
+__winfnc HANDLE SetupDiGetClassDevsA(const void *ClassGuid, const char *Enumerator, void *hwndParent, DWORD Flags) {
+    return INVALID_HANDLE_VALUE;
+}
+WINAPI(SetupDiGetClassDevsA)
+
+__winfnc BOOL SetupDiEnumDeviceInterfaces(HANDLE DeviceInfoSet, void *DeviceInfoData, const void *InterfaceClassGuid, DWORD MemberIndex, void *DeviceInterfaceData) {
+    winerr_set_code(259); // ERROR_NO_MORE_ITEMS
+    return FALSE;
+}
+WINAPI(SetupDiEnumDeviceInterfaces)
+
+__winfnc BOOL SetupDiGetDeviceInterfaceDetailA(HANDLE DeviceInfoSet, void *DeviceInterfaceData, void *DeviceInterfaceDetailData, DWORD DeviceInterfaceDetailDataSize, DWORD *RequiredSize, void *DeviceInfoData) {
+    winerr_set_code(1); // ERROR_INVALID_FUNCTION
+    return FALSE;
+}
+WINAPI(SetupDiGetDeviceInterfaceDetailA)
+
+__winfnc BOOL SetupDiDestroyDeviceInfoList(HANDLE DeviceInfoSet) {
+    return TRUE;
+}
+WINAPI(SetupDiDestroyDeviceInfoList)
+
+// --- Other Misc Stubs ---
+__winfnc void ExitProcess(UINT uExitCode) {
+    log_info("Driver requested ExitProcess(%d)", uExitCode);
+    exit(uExitCode);
+}
+WINAPI(ExitProcess)
+
+__winfnc BOOL GetConsoleMode(HANDLE hConsoleHandle, DWORD *lpMode) {
+    return FALSE;
+}
+WINAPI(GetConsoleMode)
+
+/* --- ADD TO END OF system.c --- */
+
+__winfnc UINT GetSystemDirectoryA(char *lpBuffer, UINT uSize) {
+    // Pretend we are in System32
+    const char *path = "C:\\Windows\\System32";
+    size_t len = strlen(path);
+    if (uSize > len) {
+        strcpy(lpBuffer, path);
+        return len;
+    }
+    return len + 1;
+}
+WINAPI(GetSystemDirectoryA)
+
+__winfnc UINT GetSystemDirectoryW(char16_t *lpBuffer, UINT uSize) {
+    // Unicode version stub - return 0 (fail) to force fallback or skip
+    return 0; 
+}
+WINAPI(GetSystemDirectoryW)
+
+__winfnc UINT GetSystemFirmwareTable(DWORD FirmwareTableProviderSignature, DWORD FirmwareTableID, void *pFirmwareTableBuffer, DWORD BufferSize) {
+    // Return 0 (failure). This usually tells the driver "I can't check the BIOS",
+    // so it might default to "Allow" or skip the check.
+    return 0;
+}
+WINAPI(GetSystemFirmwareTable)
+
+__winfnc void RaiseException(DWORD dwExceptionCode, DWORD dwExceptionFlags, DWORD nNumberOfArguments, const ULONG_PTR *lpArguments) {
+    log_error("Driver raised exception: 0x%x", dwExceptionCode);
+    // We cannot recover from this easily without full SEH support.
+    // Abort so we get a clean exit instead of undefined behavior.
+    abort();
+}
+WINAPI(RaiseException)
+
+__winfnc BOOL ProcessIdToSessionId(DWORD dwProcessId, DWORD *pSessionId) {
+    *pSessionId = 1; // Pretend we are in user session 1
+    return TRUE;
+}
+WINAPI(ProcessIdToSessionId)

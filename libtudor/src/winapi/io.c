@@ -272,3 +272,47 @@ __winfnc BOOL DeviceIoControl(HANDLE handle, DWORD code, const void *in_buf, DWO
     return GetOverlappedResult(handle, ovlp, out_ret, TRUE);
 }
 WINAPI(DeviceIoControl)
+
+/* --- ADD THIS TO THE END OF io.c --- */
+
+__winfnc HANDLE CreateFileA(const char *lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, void *lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
+    log_info("[STUB] CreateFileA opening: %s", lpFileName);
+    
+    // TODO: If the driver tries to open "DEVICE" or "USB", we might need to hook it here.
+    // For now, return INVALID_HANDLE_VALUE so the driver knows it failed (instead of crashing).
+    winerr_set_code(ERROR_FILE_NOT_FOUND);
+    return INVALID_HANDLE_VALUE;
+}
+WINAPI(CreateFileA)
+
+__winfnc HANDLE CreateFileW(const char16_t *lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, void *lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile) {
+    char *name = winstr_to_str(lpFileName);
+    HANDLE ret = CreateFileA(name, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+    free(name);
+    return ret;
+}
+WINAPI(CreateFileW)
+
+__winfnc DWORD SetFilePointer(HANDLE hFile, LONG lDistanceToMove, LONG *lpDistanceToMoveHigh, DWORD dwMoveMethod) {
+    // Simple stub: If we had a real file handle, we would use lseek().
+    // Since we don't support real files yet, return failure.
+    winerr_set_code(ERROR_INVALID_HANDLE);
+    return 0xFFFFFFFF; // INVALID_SET_FILE_POINTER
+}
+WINAPI(SetFilePointer)
+
+__winfnc BOOL SetFilePointerEx(HANDLE hFile, LARGE_INTEGER liDistanceToMove, LARGE_INTEGER *lpNewFilePointer, DWORD dwMoveMethod) {
+    winerr_set_code(ERROR_INVALID_HANDLE);
+    return FALSE;
+}
+WINAPI(SetFilePointerEx)
+
+__winfnc BOOL FlushFileBuffers(HANDLE hFile) {
+    return TRUE; // Pretend we flushed successfully
+}
+WINAPI(FlushFileBuffers)
+
+__winfnc DWORD GetFileType(HANDLE hFile) {
+    return 0x0002; // FILE_TYPE_CHAR (Generic character device)
+}
+WINAPI(GetFileType)

@@ -345,3 +345,55 @@ WINAPI(TlsGetValue)
 
 __winfnc BOOL TlsSetValue(DWORD idx, void *data) { return FlsSetValue(idx, data); }
 WINAPI(TlsSetValue)
+
+/* --- ADD THIS TO THE END OF sync.c --- */
+
+__winfnc BOOL InitializeCriticalSectionAndSpinCount(void *lpCriticalSection, DWORD dwSpinCount) {
+    // Reuse the existing standard initialization
+    InitializeCriticalSection(lpCriticalSection);
+    return TRUE;
+}
+WINAPI(InitializeCriticalSectionAndSpinCount)
+
+/* --- ADD THIS TO THE END OF sync.c --- */
+
+__winfnc DWORD WaitForMultipleObjects(DWORD nCount, const HANDLE *lpHandles, BOOL bWaitAll, DWORD dwMilliseconds) {
+    // CRITICAL STUB: This is likely where the driver hangs or crashes.
+    // We implement a simple polling loop.
+    
+    unsigned long long start_time;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    start_time = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+
+    while (1) {
+        // 1. Check if any object is signaled
+        // int signaled_index = -1;
+        int signaled_count = 0;
+
+        for (DWORD i = 0; i < nCount; i++) {
+            // Check status using WaitForSingleObject with 0 timeout (instant check)
+            DWORD status = WaitForSingleObject(lpHandles[i], 0);
+            if (status == 0) { // WAIT_OBJECT_0
+                if (!bWaitAll) return 0 + i; // Return immediately for "Wait Any"
+                signaled_count++;
+            }
+        }
+
+        if (bWaitAll && signaled_count == nCount) {
+            return 0; // WAIT_OBJECT_0 (All signaled)
+        }
+
+        // 2. Check timeout
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        unsigned long long current_time = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        if (dwMilliseconds != 0xFFFFFFFF && (current_time - start_time) >= dwMilliseconds) {
+            return 0x00000102L; // WAIT_TIMEOUT
+        }
+
+        // 3. Sleep briefly to prevent 100% CPU usage
+        struct timespec sleep_ts = {0, 10000000}; // 10ms
+        nanosleep(&sleep_ts, NULL);
+    }
+}
+WINAPI(WaitForMultipleObjects)

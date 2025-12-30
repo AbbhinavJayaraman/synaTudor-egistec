@@ -70,13 +70,24 @@ static const struct tudor_pair_data *get_pdata_cb(const char *name) {
         struct ipc_msg_resp_load_pdata msg;
         char buf[IPC_MAX_PDATA_SIZE];
     } resp;
-    size_t pdata_sz = ipc_recv_msg(pdata_ipc_sock, &resp, IPC_MSG_RESP_LOAD_PDATA, sizeof(resp.msg), sizeof(resp), NULL) - sizeof(resp.msg);
+    
+    // --- FIX STARTS HERE ---
+    ssize_t ret = ipc_recv_msg(pdata_ipc_sock, &resp, IPC_MSG_RESP_LOAD_PDATA, sizeof(resp.msg), sizeof(resp), NULL);
+    
+    if (ret < 0 || (size_t)ret < sizeof(resp.msg)) {
+        log_error("Failed to receive valid pairing data! (ret=%zd)", ret);
+        // Do NOT abort immediately if you can avoid it, or at least log clearly before dying.
+        // Returning NULL might let the driver fail gracefully instead of crashing hard.
+        return NULL; 
+    }
 
-    //Leak the pairing data buffer ¯\_(ツ)_/¯
+    size_t pdata_sz = (size_t)ret - sizeof(resp.msg);
+    // -----------------------
+
     struct tudor_pair_data *pdata = (struct tudor_pair_data*) malloc(sizeof(struct tudor_pair_data) + pdata_sz);
     if(!pdata) {
         perror("Couldn't allocate pairing data buffer");
-        abort();
+        abort(); 
     }
     pdata->data = pdata+1;
     pdata->data_size = pdata_sz;

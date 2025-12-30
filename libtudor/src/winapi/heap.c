@@ -54,3 +54,55 @@ __winfnc void *LocalFree(void *mem) {
     return NULL;
 }
 WINAPI(LocalFree)
+
+/* --- ADD THIS TO THE END OF heap.c --- */
+
+__winfnc void *EncodePointer(void *Ptr) {
+    return Ptr; // Bypass security encoding
+}
+WINAPI(EncodePointer)
+
+__winfnc void *DecodePointer(void *Ptr) {
+    return Ptr; // Bypass security decoding
+}
+WINAPI(DecodePointer)
+
+/* --- ADD TO END OF heap.c --- */
+
+__winfnc void *HeapReAlloc(HANDLE hHeap, DWORD dwFlags, void *lpMem, SIZE_T dwBytes) {
+    // Simple wrapper around realloc
+    return realloc(lpMem, dwBytes);
+}
+WINAPI(HeapReAlloc)
+
+__winfnc SIZE_T HeapSize(HANDLE hHeap, DWORD dwFlags, const void *lpMem) {
+    // In Linux, we can't easily get the size of a malloc'd block portably.
+    // However, many drivers check this. We can try malloc_usable_size if using glibc,
+    // or just return a "safe" lie if that fails.
+    #ifdef __GLIBC__
+    extern size_t malloc_usable_size(void *);
+    return malloc_usable_size((void*)lpMem);
+    #else
+    return 0; // Unknown
+    #endif
+}
+WINAPI(HeapSize)
+
+// Local* functions often map directly to Heap* functions in modern Windows
+__winfnc HLOCAL LocalAlloc(UINT uFlags, SIZE_T uBytes) {
+    // Ignore flags (LMEM_FIXED/ZEROINIT) for now, just malloc
+    void *ptr = malloc(uBytes);
+    if (ptr && (uFlags & 0x0040)) memset(ptr, 0, uBytes); // LMEM_ZEROINIT
+    return ptr;
+}
+WINAPI(LocalAlloc)
+
+__winfnc HLOCAL LocalReAlloc(HLOCAL hMem, SIZE_T uBytes, UINT uFlags) {
+    return realloc(hMem, uBytes);
+}
+WINAPI(LocalReAlloc)
+
+__winfnc UINT LocalSize(HLOCAL hMem) {
+    return (UINT)HeapSize(NULL, 0, hMem);
+}
+WINAPI(LocalSize)

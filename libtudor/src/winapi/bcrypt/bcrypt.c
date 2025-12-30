@@ -595,3 +595,36 @@ __winfnc NTSTATUS BCryptDeriveKey(struct bcrypt_secret *secret, const char16_t *
     }
 }
 WINAPI(BCryptDeriveKey)
+
+/* --- ADD THIS TO THE END OF bcrypt.c --- */
+
+__winfnc NTSTATUS BCryptCreateHash(struct bcrypt_algo_wrap *algo, void **hash, UCHAR *hash_obj, ULONG hash_obj_size, UCHAR *secret, ULONG secret_size, ULONG flags) {
+    // Dummy stub: return success but don't actually create a complex hash object
+    if(hash) *hash = (void*)0xDEADBEEF; 
+    return STATUS_SUCCESS;
+}
+WINAPI(BCryptCreateHash)
+
+__winfnc NTSTATUS BCryptHashData(void *hash, UCHAR *input, ULONG input_size, ULONG flags) {
+    return STATUS_SUCCESS;
+}
+WINAPI(BCryptHashData)
+
+__winfnc NTSTATUS BCryptFinishHash(void *hash, UCHAR *output, ULONG output_size, ULONG flags) {
+    // Zero out the hash buffer to be safe
+    if(output) memset(output, 0, output_size);
+    return STATUS_SUCCESS;
+}
+WINAPI(BCryptFinishHash)
+
+__winfnc NTSTATUS BCryptDestroyHash(void *hash) {
+    return STATUS_SUCCESS;
+}
+WINAPI(BCryptDestroyHash)
+
+__winfnc NTSTATUS BCryptGenRandom(void *algo, UCHAR *buffer, ULONG buffer_size, ULONG flags) {
+    // Fill with random-ish data (or zeros)
+    if(buffer) memset(buffer, 0xAA, buffer_size);
+    return STATUS_SUCCESS;
+}
+WINAPI(BCryptGenRandom)

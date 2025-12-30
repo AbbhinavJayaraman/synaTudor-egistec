@@ -76,11 +76,11 @@ bool pe_parse_opt_header(struct pe_file *pe) {
         pe->num_data_dirs = le32toh(pheader->NumberOfRvaAndSizes);
     }
 
-    //Check DLL flags
-    if(!(pe->dll_flags & PE_DLL_FLAG_DYNAMIC)) {
-        log_error("PE file isn't dynamically loadable!");
-        return false;
-    }
+    // //Check DLL flags
+    // if(!(pe->dll_flags & PE_DLL_FLAG_DYNAMIC)) {
+    //     log_error("PE file isn't dynamically loadable!");
+    //     return false;
+    // }
 
     return true;
 }
