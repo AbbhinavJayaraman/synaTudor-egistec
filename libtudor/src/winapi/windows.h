@@ -20,6 +20,12 @@ typedef unsigned long long ULONGLONG;
 typedef intptr_t LONG_PTR;
 typedef uintptr_t ULONG_PTR;
 
+// --- Added Missing Types ---
+typedef LONG_PTR LPARAM;
+typedef ULONG_PTR WPARAM;
+typedef uint32_t UINT32;
+// --------------------------
+
 typedef uintptr_t SIZE_T;
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
@@ -36,7 +42,7 @@ typedef DWORD NTSTATUS;
 typedef LONG LSTATUS;
 
 typedef struct _HANDLE *HANDLE;
-typedef HANDLE HLOCAL; // <--- Add this line
+typedef HANDLE HLOCAL; 
 
 typedef union {
     struct {
@@ -61,8 +67,8 @@ typedef struct {
 
 enum {
     ERROR_SUCCESS = 0x0,
-    ERROR_FILE_NOT_FOUND = 0x2,   // <--- Add this
-    ERROR_INVALID_HANDLE = 0x6,   // <--- Add this
+    ERROR_FILE_NOT_FOUND = 0x2,
+    ERROR_INVALID_HANDLE = 0x6,
     ERROR_INSUFFICIENT_BUFFER = 0x7a,
     ERROR_IO_INCOMPLETE = 0x3e4,
     ERROR_IO_PENDING = 0x3e5,

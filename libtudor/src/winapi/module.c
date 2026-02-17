@@ -1,4 +1,5 @@
 #include <pthread.h>
+#include <stdio.h>
 #include "internal.h"
 
 static pthread_rwlock_t modules_lock = PTHREAD_RWLOCK_INITIALIZER;
@@ -15,6 +16,8 @@ static void module_destr(struct winmodule *module) {
 }
 
 struct winmodule *winmodule_find(const char *name) {
+    if (!name) return NULL;
+
     cant_fail_ret(pthread_rwlock_rdlock(&modules_lock));
 
     struct winmodule *module = NULL;
@@ -167,20 +170,31 @@ __winfnc BOOL DisableThreadLibraryCalls(HANDLE handle) {
 }
 WINAPI(DisableThreadLibraryCalls)
 
+// --- FIX: Clean Spy Logging without Warnings ---
 __winfnc void *GetProcAddress(HANDLE handle, const char *name) {
-    struct winmodule *module = (struct winmodule*) handle->data;
-
-    //Check if it's an ordinal import
-    uintptr_t nbits = (uintptr_t) name;
-    if(!(nbits & ~((128ull << sizeof(uintptr_t)) - 1))) {
-        int ord = (int) (nbits & ((128ull << sizeof(uintptr_t)) - 1));
-        log_warn("GetProcAddress: Attempted ordinal import! module '%s' [%p] ord %d", module->name, module, ord);
-        return NULL;
+    if (handle) {
+        // Check if it's an ordinal import
+        uintptr_t nbits = (uintptr_t) name;
+        if(!(nbits & ~((128ull << sizeof(uintptr_t)) - 1))) {
+            struct winmodule *module = (struct winmodule*) handle->data;
+            int ord = (int) (nbits & ((128ull << sizeof(uintptr_t)) - 1));
+            fprintf(stderr, "[SPY] GetProcAddress: Ordinal %d in module %s\n", ord, module->name);
+            return NULL;
+        }
     }
 
-    //Try to resolve the Windows API function
+    // SPY LOGGING
+    fprintf(stderr, "[SPY] GetProcAddress: Requesting '%s'...", name);
+
     void *resolv = resolve_windows_api(name);
-    if(!resolv) winerr_set();
+    
+    if (resolv) {
+        fprintf(stderr, " FOUND (%p)\n", resolv);
+    } else {
+        fprintf(stderr, " NOT FOUND (Returning NULL)\n"); // Fixed format string
+        winerr_set();
+    }
+
     return resolv;
 }
 WINAPI(GetProcAddress)

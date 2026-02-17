@@ -1,10 +1,12 @@
 #include "internal.h"
 #include <tudor/log.h>
 #include <string.h>
-#include <stdio.h> // For fprintf
+#include <stdio.h>
 
-// Helper to force logs to appear
 #define SHIM_LOG(fmt, ...) fprintf(stderr, "[SHIM] " fmt "\n", ##__VA_ARGS__)
+
+// --- External Functions from sync.c ---
+extern HANDLE CreateEventW(void *attrs, BOOL manual_reset, BOOL initial_state, const char16_t *name);
 
 // --- Exception Handling ---
 __winfnc void RtlUnwindEx(void *TargetFrame, void *TargetIp, void *ExceptionRecord, void *ReturnValue, void *ContextRecord, void *HistoryTable) {
@@ -13,31 +15,21 @@ __winfnc void RtlUnwindEx(void *TargetFrame, void *TargetIp, void *ExceptionReco
 WINAPI(RtlUnwindEx)
 
 __winfnc void* RtlVirtualUnwind(DWORD HandlerType, DWORD64 ImageBase, DWORD64 ControlPc, void *FunctionEntry, void *ContextRecord, void *HandlerData, void *EstablisherFrame, void *ContextPointers) {
-    SHIM_LOG("RtlVirtualUnwind called (Returning NULL)");
     return NULL;
 }
 WINAPI(RtlVirtualUnwind)
 
-__winfnc void* RtlPcToFileHeader(void *PcValue, void *BaseOfImage) {
-    // SHIM_LOG("RtlPcToFileHeader"); // Too spammy usually
-    return NULL;
-}
+__winfnc void* RtlPcToFileHeader(void *PcValue, void *BaseOfImage) { return NULL; }
 WINAPI(RtlPcToFileHeader)
 
 // --- Console / IO ---
-__winfnc UINT GetConsoleCP() { 
-    SHIM_LOG("GetConsoleCP");
-    return 65001; 
-}
+__winfnc UINT GetConsoleCP() { return 65001; }
 WINAPI(GetConsoleCP)
 
 __winfnc UINT GetOEMCP() { return 65001; }
 WINAPI(GetOEMCP)
 
-__winfnc BOOL SetStdHandle(DWORD nStdHandle, HANDLE hHandle) { 
-    SHIM_LOG("SetStdHandle(%d)", nStdHandle);
-    return TRUE; 
-}
+__winfnc BOOL SetStdHandle(DWORD nStdHandle, HANDLE hHandle) { return TRUE; }
 WINAPI(SetStdHandle)
 
 __winfnc BOOL WriteConsoleW(HANDLE hConsoleOutput, const void *lpBuffer, DWORD nNumberOfCharsToWrite, DWORD *lpNumberOfCharsWritten, void *lpReserved) {
@@ -48,7 +40,6 @@ WINAPI(WriteConsoleW)
 
 // --- Resources ---
 __winfnc void* FindResourceW(HANDLE hModule, const char16_t *lpName, const char16_t *lpType) { 
-    SHIM_LOG("FindResourceW");
     return NULL; 
 }
 WINAPI(FindResourceW)
@@ -62,14 +53,11 @@ WINAPI(LockResource)
 __winfnc DWORD SizeofResource(HANDLE hModule, void *hResInfo) { return 0; }
 WINAPI(SizeofResource)
 
-// --- Strings / Path ---
+// --- Strings / Path / Locale ---
 __winfnc char16_t* StrStrIW(const char16_t *pszFirst, const char16_t *pszSrch) { return NULL; }
 WINAPI(StrStrIW)
 
-__winfnc BOOL PathFileExistsW(const char16_t *pszPath) { 
-    SHIM_LOG("PathFileExistsW");
-    return FALSE; 
-}
+__winfnc BOOL PathFileExistsW(const char16_t *pszPath) { return FALSE; }
 WINAPI(PathFileExistsW)
 
 __winfnc BOOL PathFileExistsA(const char *pszPath) { return FALSE; }
@@ -87,7 +75,6 @@ WINAPI(wsprintfW)
 __winfnc char* lstrcpyA(char *dest, const char *src) { return strcpy(dest, src); }
 WINAPI(lstrcpyA)
 
-// --- CRITICAL FIX: Actually copy the string ---
 __winfnc char16_t* lstrcpyW(char16_t *dest, const char16_t *src) { 
     char16_t *d = dest;
     if (!dest || !src) return dest;
@@ -110,6 +97,30 @@ WINAPI(StrCmpNIW)
 __winfnc char16_t* StrStrW(const char16_t *pszFirst, const char16_t *pszSrch) { return NULL; }
 WINAPI(StrStrW)
 
+__winfnc int CompareStringEx(const char16_t *lpLocaleName, DWORD dwCmpFlags, const char16_t *lpString1, int cchCount1, const char16_t *lpString2, int cchCount2, void *lpVersionInformation, void *lpReserved, LPARAM lParam) { return 0; }
+WINAPI(CompareStringEx)
+
+__winfnc int LCMapStringEx(const char16_t *lpLocaleName, DWORD dwMapFlags, const char16_t *lpSrcStr, int cchSrc, char16_t *lpDestStr, int cchDest, void *lpVersionInformation, void *lpReserved, LPARAM lParam) { return 0; }
+WINAPI(LCMapStringEx)
+
+__winfnc BOOL EnumSystemLocalesEx(void *lpLocaleEnumProcEx, DWORD dwFlags, LPARAM lParam, void *lpReserved) { return FALSE; }
+WINAPI(EnumSystemLocalesEx)
+
+__winfnc int GetDateFormatEx(const char16_t *lpLocaleName, DWORD dwFlags, const void *lpDate, const char16_t *lpFormat, char16_t *lpDateStr, int cchDate, const char16_t *lpCalendar) { return 0; }
+WINAPI(GetDateFormatEx)
+
+__winfnc int GetTimeFormatEx(const char16_t *lpLocaleName, DWORD dwFlags, const void *lpTime, const char16_t *lpFormat, char16_t *lpTimeStr, int cchTime) { return 0; }
+WINAPI(GetTimeFormatEx)
+
+__winfnc int GetLocaleInfoEx(const char16_t *lpLocaleName, DWORD LCType, char16_t *lpLCData, int cchData) { return 0; }
+WINAPI(GetLocaleInfoEx)
+
+__winfnc int GetUserDefaultLocaleName(char16_t *lpLocaleName, int cchLocaleName) { return 0; }
+WINAPI(GetUserDefaultLocaleName)
+
+__winfnc BOOL IsValidLocaleName(const char16_t *lpLocaleName) { return FALSE; }
+WINAPI(IsValidLocaleName)
+
 // --- Registry / Security ---
 __winfnc LSTATUS RegDeleteValueW(HANDLE hKey, const char16_t *lpValueName) { return ERROR_SUCCESS; }
 WINAPI(RegDeleteValueW)
@@ -123,7 +134,7 @@ WINAPI(RegDeleteKeyValueW)
 __winfnc LSTATUS RegSetKeyValueW(HANDLE hKey, const char16_t *lpSubKey, const char16_t *lpValueName, DWORD dwType, const void *lpData, DWORD cbData) { return ERROR_SUCCESS; }
 WINAPI(RegSetKeyValueW)
 
-__winfnc LSTATUS RegEnumKeyW(HANDLE hKey, DWORD dwIndex, char16_t *lpName, DWORD *lpcchName, void *lpReserved, char16_t *lpClass, DWORD *lpcchClass, void *lpftLastWriteTime) { return 259; } // ERROR_NO_MORE_ITEMS
+__winfnc LSTATUS RegEnumKeyW(HANDLE hKey, DWORD dwIndex, char16_t *lpName, DWORD *lpcchName, void *lpReserved, char16_t *lpClass, DWORD *lpcchClass, void *lpftLastWriteTime) { return 259; } 
 WINAPI(RegEnumKeyW)
 
 __winfnc LSTATUS RegEnumValueA(HANDLE hKey, DWORD dwIndex, char *lpValueName, DWORD *lpcchValueName, void *lpReserved, DWORD *lpType, BYTE *lpData, DWORD *lpcbData) { return 259; }
@@ -156,7 +167,6 @@ __winfnc void WTSFreeMemory(void *pMemory) {}
 WINAPI(WTSFreeMemory)
 
 __winfnc void GetSystemTime(void *lpSystemTime) {
-    SHIM_LOG("GetSystemTime");
     if(lpSystemTime) memset(lpSystemTime, 0, 16); 
 }
 WINAPI(GetSystemTime)
@@ -166,3 +176,83 @@ WINAPI(DebugBreak)
 
 __winfnc LONG RtlCompareUnicodeString(const UNICODE_STRING *String1, const UNICODE_STRING *String2, BOOLEAN CaseInSensitive) { return 0; }
 WINAPI(RtlCompareUnicodeString)
+
+// --- CRITICAL FIX: Real Handles ---
+
+#define CREATE_EVENT_MANUAL_RESET 0x00000001
+#define CREATE_EVENT_INITIAL_SET  0x00000002
+
+__winfnc HANDLE CreateEventExW(void *lpEventAttributes, const char16_t *lpName, DWORD dwFlags, DWORD dwDesiredAccess) { 
+    BOOL manual = (dwFlags & CREATE_EVENT_MANUAL_RESET) ? TRUE : FALSE;
+    BOOL initial = (dwFlags & CREATE_EVENT_INITIAL_SET) ? TRUE : FALSE;
+    return CreateEventW(lpEventAttributes, manual, initial, lpName);
+}
+WINAPI(CreateEventExW)
+
+__winfnc HANDLE CreateSemaphoreExW(void *lpSemaphoreAttributes, LONG lInitialCount, LONG lMaximumCount, const char16_t *lpName, DWORD dwFlags, DWORD dwDesiredAccess) {
+    // Hack: Libtudor doesn't have semaphores. Return an Event handle so Wait/Close functions don't crash.
+    // We make it auto-reset (like a sema wait) and initially signaled if count > 0.
+    BOOL initial = (lInitialCount > 0) ? TRUE : FALSE;
+    SHIM_LOG("CreateSemaphoreExW calling CreateEventW (FAKE SEMAPHORE)");
+    return CreateEventW(lpSemaphoreAttributes, FALSE, initial, lpName);
+}
+WINAPI(CreateSemaphoreExW)
+
+// --- Threadpool Stubs ---
+__winfnc BOOL SetThreadStackGuarantee(ULONG *StackSizeInBytes) { return TRUE; }
+WINAPI(SetThreadStackGuarantee)
+
+__winfnc void* CreateThreadpoolTimer(void *pfpti, void *pv, void *pcbe) { return NULL; }
+WINAPI(CreateThreadpoolTimer)
+
+__winfnc void SetThreadpoolTimer(void *pti, void *pftDueTime, DWORD msPeriod, DWORD msWindowLength) {}
+WINAPI(SetThreadpoolTimer)
+
+__winfnc void WaitForThreadpoolTimerCallbacks(void *pti, BOOL fCancelPendingCallbacks) {}
+WINAPI(WaitForThreadpoolTimerCallbacks)
+
+__winfnc void CloseThreadpoolTimer(void *pti) {}
+WINAPI(CloseThreadpoolTimer)
+
+__winfnc void* CreateThreadpoolWait(void *pfnwa, void *pv, void *pcbe) { return NULL; }
+WINAPI(CreateThreadpoolWait)
+
+__winfnc void SetThreadpoolWait(void *pwa, HANDLE h, void *pftTimeout) {}
+WINAPI(SetThreadpoolWait)
+
+__winfnc void CloseThreadpoolWait(void *pwa) {}
+WINAPI(CloseThreadpoolWait)
+
+__winfnc void FlushProcessWriteBuffers() {}
+WINAPI(FlushProcessWriteBuffers)
+
+__winfnc void FreeLibraryWhenCallbackReturns(void *ptp, HANDLE hLibModule) {}
+WINAPI(FreeLibraryWhenCallbackReturns)
+
+__winfnc DWORD GetCurrentProcessorNumber() { return 0; }
+WINAPI(GetCurrentProcessorNumber)
+
+__winfnc BOOL GetLogicalProcessorInformation(void *Buffer, DWORD *ReturnedLength) { return FALSE; }
+WINAPI(GetLogicalProcessorInformation)
+
+// --- File / DLL Loading Stubs ---
+__winfnc BOOL SetDefaultDllDirectories(DWORD DirectoryFlags) { return TRUE; }
+WINAPI(SetDefaultDllDirectories)
+
+__winfnc BOOL CreateSymbolicLinkW(const char16_t *lpSymlinkFileName, const char16_t *lpTargetFileName, DWORD dwFlags) { return FALSE; }
+WINAPI(CreateSymbolicLinkW)
+
+__winfnc LONG GetCurrentPackageId(UINT32 *bufferLength, BYTE *buffer) { return 15700; } // APPMODEL_ERROR_NO_PACKAGE
+WINAPI(GetCurrentPackageId)
+
+__winfnc BOOL GetFileInformationByHandleExW(HANDLE hFile, int FileInformationClass, void *lpFileInformation, DWORD dwBufferSize) {
+    SHIM_LOG("GetFileInformationByHandleExW called (Returning FALSE)");
+    return FALSE; 
+}
+WINAPI(GetFileInformationByHandleExW)
+
+__winfnc BOOL SetFileInformationByHandleW(HANDLE hFile, int FileInformationClass, void *lpFileInformation, DWORD dwBufferSize) {
+    SHIM_LOG("SetFileInformationByHandleW called (Returning TRUE)");
+    return TRUE; 
+}
+WINAPI(SetFileInformationByHandleW)
