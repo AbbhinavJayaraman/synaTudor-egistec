@@ -1,115 +1,77 @@
 #include "internal.h"
 
-const struct tudor_pair_data *(*tudor_get_pdata_fnc)(const char *name);
-void (*tudor_set_pdata_fnc)(const char *name, const struct tudor_pair_data *pdata);
+// Emulated Registry for Egis Driver (Derived from egistouchfp0575.inf)
+bool tudor_reg_handler(struct winreg_key *key, const char *name, uint32_t type, void *data, uint32_t *size) {
 
-bool tudor_reg_handler(void *ctx, void *ctx_obj, const char *key_name, const char *val_name, bool is_write, void *buf, size_t *buf_size, enum winreg_val_type *val_type) {
-    if(!buf_size) return false;
-
-    //Handle the driver configuration key
-    if(!is_write && strcmp(key_name, "HKEY_LOCAL_MACHINE\\SOFTWARE\\Syna") == 0) {
-        if(strcmp(val_name, "wbfMode") == 0) {
-            if(buf && *buf_size >= 4) {
-                *((uint32_t*) buf) = TRUE;
-            } else if(buf) return false;
-            *buf_size = 4;
-            *val_type = WINREG_DWORD;
-            return true;
-        }
-        if(strcmp(val_name, "useWbf") == 0) {
-            if(buf && *buf_size >= 4) {
-                *((uint32_t*) buf) = TRUE;
-            } else if(buf) return false;
-            *buf_size = 4;
-            *val_type = WINREG_DWORD;
-            return true;
-        }
-        return false;
+    // Debug: Log all requests to see if we missed anything
+    if(type == REG_NONE) {
+        log_debug("REG: Open Key -> '%s'", name);
+    } else {
+        log_debug("REG: Read Value -> '%s'", name);
     }
 
-    //Handle device state key
-    if(strcmp(key_name, "HKEY_LOCAL_MACHINE\\Tudor\\Device") == 0 && ctx_obj) {
-        struct tudor_device *dev = (struct tudor_device*) ctx_obj;
+    // --- HANDLE KEY OPENS ---
+    if(type == REG_NONE) {
+        // The driver looks for its parameters in these locations:
 
-        if(strcmp(val_name, "PairingInProcess") == 0) {
-            if(buf && *buf_size >= 4) {
-                if(!is_write) *((int*) buf) = dev->state.pairing_in_process;
-                else dev->state.pairing_in_process = *((int*) buf) != 0;
-            } else if(is_write || buf) return false;
-            *buf_size = 4;
-            if(!is_write) *val_type = WINREG_DWORD;
-            return true;
-        } else if(strcmp(val_name, "UnairingInProcess") == 0) {
-            if(buf && *buf_size >= 4) {
-                if(!is_write) *((int*) buf) = dev->state.unpairing_in_process;
-                else dev->state.unpairing_in_process = *((int*) buf) != 0;
-            } else if(is_write || buf) return false;
-            *buf_size = 4;
-            if(!is_write) *val_type = WINREG_DWORD;
-            return true;
-        } else if(strcmp(val_name, "DeviceUpdateInProcess") == 0) {
-            if(buf && *buf_size >= 4) {
-                if(!is_write) *((int*) buf) = dev->state.update_in_process;
-                else dev->state.update_in_process = *((int*) buf) != 0;
-            } else if(is_write || buf) return false;
-            *buf_size = 4;
-            if(!is_write) *val_type = WINREG_DWORD;
-            return true;
-        } else if(strcmp(val_name, "deviceInitializeFailures") == 0) {
-            if(buf && *buf_size >= 4) {
-                if(!is_write) *((int*) buf) = dev->state.init_fails;
-                else dev->state.init_fails = *((int*) buf);
-            } else if(is_write || buf) return false;
-            *buf_size = 4;
-            if(!is_write) *val_type = WINREG_DWORD;
-            return true;
-        } else if(strcmp(val_name, "updateFirmwareFailureCount") == 0) {
-            if(buf && *buf_size >= 4) {
-                if(!is_write) *((int*) buf) = dev->state.update_fails;
-                else dev->state.update_fails = *((int*) buf);
-            } else if(is_write || buf) return false;
-            *buf_size = 4;
-            if(!is_write) *val_type = WINREG_DWORD;
-            return true;
-        } else if(strcmp(val_name, "LastUpdateSystemTimeStamp") == 0) {
-            if(buf && *buf_size >= 4) {
-                if(!is_write) *((uint32_t*) buf) = dev->state.last_update_timestamp;
-                else dev->state.last_update_timestamp = *((uint32_t*) buf);
-            } else if(is_write || buf) return false;
-            *buf_size = 4;
-            if(!is_write) *val_type = WINREG_DWORD;
-            return true;
-        }
+        // 1. The main driver service key
+        if(winstr_casecmp(name, "HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Services\\EgisTouchFP0575\\Parameters") == 0) return true;
+
+        // 2. The WDF driver key
+        if(winstr_casecmp(name, "HKEY_LOCAL_MACHINE\\Tudor\\Driver") == 0) return true;
+
+        // 3. The Device key (often used for hardware-specifics)
+        if(winstr_casecmp(name, "HKEY_LOCAL_MACHINE\\Tudor\\Device") == 0) return true;
 
         return false;
     }
 
-    //Handle pair data store key
-    if(strcmp(key_name, "HKEY_CURRENT_USER\\Software\\Synaptics\\PairingData") == 0) {
-        //Call callback
-        if(!is_write) {
-            if(tudor_get_pdata_fnc) {
-                const struct tudor_pair_data *pdata = tudor_get_pdata_fnc(val_name);
-                if(!pdata) return false;
+    // --- HANDLE VALUE READS ---
 
-                if(buf && *buf_size >= pdata->data_size) {
-                    memcpy(buf, pdata->data, pdata->data_size);
-                } else if(buf) return false;
-                *buf_size = pdata->data_size;
-                *val_type = WINREG_BINARY;
-            }
-        } else {
-            if(tudor_set_pdata_fnc) {
-                tudor_set_pdata_fnc(val_name, &(struct tudor_pair_data) {
-                    .data = buf,
-                    .data_size = *buf_size
-                });
-                return true;
-            }
+    // [Configuration from egistouchfp0575.inf]
+
+    if(winstr_casecmp(name, "SensorType") == 0) {
+        if(type == REG_DWORD && *size >= 4) {
+            *(uint32_t*)data = 1; // 1 = Touch Sensor (Not Swipe)
+            *size = 4;
+            return true;
         }
-
-        return false;
     }
 
+    if(winstr_casecmp(name, "EnrollCount") == 0) {
+        if(type == REG_DWORD && *size >= 4) {
+            *(uint32_t*)data = 12; // Driver expects 12 touches, not 15
+            *size = 4;
+            return true;
+        }
+    }
+
+    // Power Management (Crucial for initialization stability)
+    if(winstr_casecmp(name, "SelectiveSuspendEnabled") == 0) {
+        if(type == REG_DWORD && *size >= 4) {
+            *(uint32_t*)data = 0; // Disable suspend for stability during RE
+            *size = 4;
+            return true;
+        }
+    }
+
+    if(winstr_casecmp(name, "IdleTimer") == 0) {
+        if(type == REG_DWORD && *size >= 4) {
+            *(uint32_t*)data = 10000; // 10,000ms (10s) default
+            *size = 4;
+            return true;
+        }
+    }
+
+    // Trace Flags (Enable driver-internal logging if possible)
+    if(winstr_casecmp(name, "WppRecorder_TraceLevel") == 0) {
+        if(type == REG_DWORD && *size >= 4) {
+            *(uint32_t*)data = 4; // Verbose
+            *size = 4;
+            return true;
+        }
+    }
+
+    log_warn("REG: MISSING VALUE -> '%s'", name);
     return false;
 }
