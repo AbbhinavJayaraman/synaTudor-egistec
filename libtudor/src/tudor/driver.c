@@ -1,5 +1,7 @@
 #include "internal.h"
 
+// void register_shims();
+
 extern uint8_t _binary____libtudor_drivers_EgisTouchFPSensor0575_dll_start, _binary____libtudor_drivers_EgisTouchFPSensor0575_dll_end;
 extern uint8_t _binary____libtudor_drivers_EgisTouchFPEngine0575_dll_start, _binary____libtudor_drivers_EgisTouchFPEngine0575_dll_end; // <--- Add this
 extern uint8_t _binary____libtudor_drivers_EgisTouchFP0575_dll_start, _binary____libtudor_drivers_EgisTouchFP0575_dll_end;
@@ -59,6 +61,8 @@ bool tudor_init() {
     //Register dummy modules
     winmodule_register(&ntdll_module);
 
+    // register_shims();
+
     if(tudor_log_traces) {
         //Register trace messages
         winlog_register_trace_msg(DEFINE_GUID(58f95b1a, 8efd, 39f0, 5626, 3e620b587295), 0x0c, "%s<X> checkpoint hit <X>");
@@ -86,7 +90,7 @@ bool tudor_init() {
         }
         winmodule_register(&dll->module);
         log_info("Loaded driver DLL '%s' [%ld bytes]", dll->module.name, dll->pe_image_end - dll->pe_image);
-        
+
         if(dll->is_adapter) tudor_adapter_dll = dll;
         if(dll->is_driver) tudor_driver_dll = dll;
         if(dll->is_engine) tudor_engine_dll = dll; // <--- Capture engine DLL
@@ -149,8 +153,8 @@ bool tudor_init() {
         log_error("Error querying engine interface: 0x%x!", hres);
         return false;
     }
-    
-    
+
+
     return true;
 }
 
@@ -160,7 +164,7 @@ bool tudor_shutdown() {
 
     log_debug("Unloading WDF driver...");
     winwdf_unload_driver(tudor_wdf_driver);
-    
+
     if(umdf_driver.DriverUnload) {
         log_debug("Unloading UMDF driver...");
         umdf_driver.DriverUnload(&umdf_driver);
