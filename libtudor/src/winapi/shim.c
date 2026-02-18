@@ -7,6 +7,7 @@
 
 // --- External Functions from sync.c ---
 extern HANDLE CreateEventW(void *attrs, BOOL manual_reset, BOOL initial_state, const char16_t *name);
+extern BOOL SetEvent(HANDLE handle); // Used to fake ReleaseSemaphore
 
 // --- Exception Handling ---
 __winfnc void RtlUnwindEx(void *TargetFrame, void *TargetIp, void *ExceptionRecord, void *ReturnValue, void *ContextRecord, void *HistoryTable) {
@@ -177,7 +178,7 @@ WINAPI(DebugBreak)
 __winfnc LONG RtlCompareUnicodeString(const UNICODE_STRING *String1, const UNICODE_STRING *String2, BOOLEAN CaseInSensitive) { return 0; }
 WINAPI(RtlCompareUnicodeString)
 
-// --- CRITICAL FIX: Real Handles ---
+// --- Synchronization (Critical Updates) ---
 
 #define CREATE_EVENT_MANUAL_RESET 0x00000001
 #define CREATE_EVENT_INITIAL_SET  0x00000002
@@ -190,13 +191,21 @@ __winfnc HANDLE CreateEventExW(void *lpEventAttributes, const char16_t *lpName, 
 WINAPI(CreateEventExW)
 
 __winfnc HANDLE CreateSemaphoreExW(void *lpSemaphoreAttributes, LONG lInitialCount, LONG lMaximumCount, const char16_t *lpName, DWORD dwFlags, DWORD dwDesiredAccess) {
-    // Hack: Libtudor doesn't have semaphores. Return an Event handle so Wait/Close functions don't crash.
-    // We make it auto-reset (like a sema wait) and initially signaled if count > 0.
+    // HACK: Map Semaphore to Auto-Reset Event
     BOOL initial = (lInitialCount > 0) ? TRUE : FALSE;
     SHIM_LOG("CreateSemaphoreExW calling CreateEventW (FAKE SEMAPHORE)");
     return CreateEventW(lpSemaphoreAttributes, FALSE, initial, lpName);
 }
 WINAPI(CreateSemaphoreExW)
+
+// CRITICAL: Driver likely calls this to signal the semaphore
+__winfnc BOOL ReleaseSemaphore(HANDLE hSemaphore, LONG lReleaseCount, LONG *lpPreviousCount) {
+    // Since we faked the semaphore as an Event, we "release" it by setting the event.
+    // This allows WaitForSingleObject to unblock.
+    if(lpPreviousCount) *lpPreviousCount = 0; 
+    return SetEvent(hSemaphore); 
+}
+WINAPI(ReleaseSemaphore)
 
 // --- Threadpool Stubs ---
 __winfnc BOOL SetThreadStackGuarantee(ULONG *StackSizeInBytes) { return TRUE; }

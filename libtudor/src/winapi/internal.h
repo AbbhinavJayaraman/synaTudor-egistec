@@ -10,8 +10,7 @@ DWORD win_get_thread_id();
 //Synchronization
 struct win_sync_object;
 
-#define INFINITE 0xffffffff
-#define WAIT_TIMEOUT 0x00000102L
+// INFINITE and WAIT_TIMEOUT removed (moved to windows.h)
 
 typedef DWORD win_sync_obj_wait_fnc(struct win_sync_object *sync_obj, DWORD timeout);
 

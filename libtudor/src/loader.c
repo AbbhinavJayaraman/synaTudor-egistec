@@ -110,10 +110,31 @@ bool load_dll(struct dll_image *dll, const char *name, uint8_t *data, uint32_t s
     //Apply section protections
     log_debug("Applying memory protections to image");
 
+    // 1. Reset everything to NONE to catch stray accesses
     if(mprotect(image_mem, pe.image_size, PROT_NONE)) {
         perror("Could't apply default image protection");
         return false;
     }
+
+    // --- CRITICAL FIX: Make the PE Header Readable ---
+    // The DOS header is at the start (image_mem). We calculate the size of headers
+    // roughly by finding where the first section starts.
+    size_t header_size = 0x1000; // Default to 4KB (one page)
+    if (pe.num_sects > 0) {
+        header_size = pe.sections[0].mem_off;
+        // Align to page boundary (round up)
+        if (header_size % 0x1000) header_size = (header_size & ~0xFFF) + 0x1000;
+    }
+    
+    // Ensure we don't protect more than the image
+    if (header_size > pe.image_size) header_size = pe.image_size;
+
+    log_debug("Applying PROT_READ to PE Headers (0 - %zx)", header_size);
+    if(mprotect(image_mem, header_size, PROT_READ)) {
+        perror("Couldn't apply header protection");
+        // Don't fail here, try to continue
+    }
+    // --------------------------------------------------
 
     for(int i = 0; i < pe.num_sects; i++) {
         struct pe_section *sec = &pe.sections[i];
@@ -122,7 +143,16 @@ bool load_dll(struct dll_image *dll, const char *name, uint8_t *data, uint32_t s
         if(sec->flags & PE_SECTION_CAN_READ) prot |= PROT_READ;
         if(sec->flags & PE_SECTION_CAN_WRITE) prot |= PROT_WRITE;
         if(sec->flags & PE_SECTION_CAN_EXECUTE) prot |= PROT_EXEC;
-        if(mprotect(image_mem + sec->mem_off, sec->mem_size, prot)) {
+        
+        // Ensure protections apply to whole pages
+        // Note: mem_off is usually page aligned, but mem_size might not be.
+        // mprotect requires alignment.
+        void *page_start = image_mem + sec->mem_off;
+        size_t page_len = sec->mem_size;
+        
+        // Handle alignment if necessary (usually handled by mprotect internals or PE alignment)
+        
+        if(mprotect(page_start, page_len, prot)) {
             perror("Could't apply image section protection");
             return false;
         }

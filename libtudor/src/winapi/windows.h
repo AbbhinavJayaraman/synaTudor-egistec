@@ -20,11 +20,9 @@ typedef unsigned long long ULONGLONG;
 typedef intptr_t LONG_PTR;
 typedef uintptr_t ULONG_PTR;
 
-// --- Added Missing Types ---
 typedef LONG_PTR LPARAM;
 typedef ULONG_PTR WPARAM;
 typedef uint32_t UINT32;
-// --------------------------
 
 typedef uintptr_t SIZE_T;
 typedef unsigned char BYTE;
@@ -43,6 +41,15 @@ typedef LONG LSTATUS;
 
 typedef struct _HANDLE *HANDLE;
 typedef HANDLE HLOCAL; 
+
+// --- Added Missing Constants ---
+#define INVALID_HANDLE_VALUE ((HANDLE)(LONG_PTR)-1)
+#define INFINITE 0xFFFFFFFF
+#define WAIT_OBJECT_0 0
+#define WAIT_TIMEOUT 258
+#define WAIT_ABANDONED 0x00000080
+#define WAIT_FAILED 0xFFFFFFFF
+// -------------------------------
 
 typedef union {
     struct {

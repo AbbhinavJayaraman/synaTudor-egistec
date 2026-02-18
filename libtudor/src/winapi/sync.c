@@ -3,9 +3,16 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <errno.h>
+#include <time.h> // Added for clock_gettime
 #include "internal.h"
 
+// Helper to validate handles before use
+static bool is_valid_handle(HANDLE h) {
+    return h && h != INVALID_HANDLE_VALUE;
+}
+
 DWORD win_wait_sync_obj(HANDLE handle, DWORD timeout) {
+    if (!is_valid_handle(handle)) return WAIT_FAILED;
     struct win_sync_object *obj = (struct win_sync_object*) handle->data;
     return obj->wait_fnc(obj, timeout);
 }
@@ -29,7 +36,6 @@ __winfnc BOOL InitializeCriticalSectionEx(CRITICAL_SECTION *sect, DWORD spinCoun
     if(!sect->LockSemaphore) { winerr_set_errno(); return FALSE; }
     sect->SpinCount = spinCount;
 
-    //Initialize the mutex
     pthread_mutexattr_t attr;
     cant_fail_ret(pthread_mutexattr_init(&attr));
     cant_fail_ret(pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE));
@@ -53,16 +59,13 @@ __winfnc void InitializeCriticalSection(CRITICAL_SECTION *sect) {
 WINAPI(InitializeCriticalSection)
 
 __winfnc void DeleteCriticalSection(CRITICAL_SECTION* sect) {
-    //Destroy the mutex
     cant_fail_ret(pthread_mutex_destroy((pthread_mutex_t*) sect->LockSemaphore));
     free(sect->LockSemaphore);
 }
 WINAPI(DeleteCriticalSection)
 
 __winfnc void EnterCriticalSection(CRITICAL_SECTION *sect) {
-    //Lock the mutex
     cant_fail_ret(pthread_mutex_lock((pthread_mutex_t*) sect->LockSemaphore));
-
     if(sect->RecursionCount++ == 0) {
         sect->LockCount = 1;
         sect->OwningThread = (HANDLE) pthread_self();
@@ -75,8 +78,6 @@ __winfnc void LeaveCriticalSection(CRITICAL_SECTION *sect) {
         sect->LockCount = 0;
         sect->OwningThread = NULL;
     }
-
-    //Unlock the mutex
     cant_fail_ret(pthread_mutex_unlock((pthread_mutex_t*) sect->LockSemaphore));
 }
 WINAPI(LeaveCriticalSection)
@@ -96,16 +97,12 @@ static struct sync_event {
 } *events_head;
 
 static void evt_destr(struct sync_event *evt) {
-    //Unlink the event
     cant_fail_ret(pthread_rwlock_wrlock(&events_lock));
-
     if(evt->prev) evt->prev->next = evt->next;
     else events_head = evt->next;
     if(evt->next) evt->next->prev = evt->prev;
-
     cant_fail_ret(pthread_rwlock_unlock(&events_lock));
 
-    //Free memory
     cant_fail_ret(pthread_cond_destroy(&evt->cond));
     cant_fail_ret(pthread_mutex_destroy(&evt->lock));
     free((void*) evt->name);
@@ -116,12 +113,17 @@ static DWORD evt_wait(struct sync_event *evt, DWORD timeout) {
     DWORD res = 0;
     cant_fail_ret(pthread_mutex_lock(&evt->lock));
 
-    //Wait for the event
     while(!evt->state) {
         if(timeout != INFINITE) {
             struct timespec time;
-            time.tv_nsec = timeout * 10000000L;
-            time.tv_sec = timeout / 1000L;
+            clock_gettime(CLOCK_REALTIME, &time); // Fixed to use current time + timeout
+            time.tv_sec += timeout / 1000;
+            time.tv_nsec += (timeout % 1000) * 1000000L;
+            if (time.tv_nsec >= 1000000000L) {
+                time.tv_sec++;
+                time.tv_nsec -= 1000000000L;
+            }
+
             int err = pthread_cond_timedwait(&evt->cond, &evt->lock, &time);
             if(err == ETIMEDOUT) {
                 res = WAIT_TIMEOUT;
@@ -131,7 +133,6 @@ static DWORD evt_wait(struct sync_event *evt, DWORD timeout) {
         } else cant_fail_ret(pthread_cond_wait(&evt->cond, &evt->lock));
     }
 
-    //Auto-reset event
     if(res == 0 && !evt->manual_reset) evt->state = false;
 
     cant_fail_ret(pthread_mutex_unlock(&evt->lock));
@@ -139,7 +140,6 @@ static DWORD evt_wait(struct sync_event *evt, DWORD timeout) {
 }
 
 HANDLE win_create_event(const char *name, bool initial_state, bool manual_reset) {
-    //Allocate the event
     struct sync_event *evt = (struct sync_event*) malloc(sizeof(struct sync_event));
     if(!evt) { winerr_set_errno(); return NULL; }
     evt->sync_obj.wait_fnc = (win_sync_obj_wait_fnc*) evt_wait;
@@ -151,23 +151,20 @@ HANDLE win_create_event(const char *name, bool initial_state, bool manual_reset)
     cant_fail_ret(pthread_mutex_init(&evt->lock, NULL));
     cant_fail_ret(pthread_cond_init(&evt->cond, NULL));
 
-    //Add event to list
     cant_fail_ret(pthread_rwlock_wrlock(&events_lock));
-
     evt->prev = NULL;
     evt->next = events_head;
     if(events_head) events_head->prev = evt;
     events_head = evt;
-
     cant_fail_ret(pthread_rwlock_unlock(&events_lock));
 
     return evt->handle;
 }
 
 void win_set_event(HANDLE handle) {
+    if (!is_valid_handle(handle)) return; // Safety check
     struct sync_event *evt = (struct sync_event*) handle->data;
 
-    //Signal the event
     cant_fail_ret(pthread_mutex_lock(&evt->lock));
     evt->state = true;
     cant_fail_ret(pthread_cond_broadcast(&evt->cond));
@@ -175,9 +172,9 @@ void win_set_event(HANDLE handle) {
 }
 
 void win_reset_event(HANDLE handle) {
+    if (!is_valid_handle(handle)) return; // Safety check
     struct sync_event *evt = (struct sync_event*) handle->data;
 
-    //Reset the event
     cant_fail_ret(pthread_mutex_lock(&evt->lock));
     evt->state = false;
     cant_fail_ret(pthread_cond_broadcast(&evt->cond));
@@ -198,31 +195,32 @@ __winfnc HANDLE CreateEventW(void *attrs, BOOL manual_reset, BOOL initial_state,
 WINAPI(CreateEventW);
 
 __winfnc BOOL SetEvent(HANDLE handle) {
-    if(handle == INVALID_HANDLE_VALUE) return FALSE;
+    if (!is_valid_handle(handle)) return FALSE;
     win_set_event(handle);
     return TRUE;
 }
 WINAPI(SetEvent)
 
 __winfnc BOOL ResetEvent(HANDLE handle) {
-    if(handle == INVALID_HANDLE_VALUE) return FALSE;
+    if (!is_valid_handle(handle)) return FALSE;
     win_reset_event(handle);
     return TRUE;
 }
 WINAPI(ResetEvent)
 
 __winfnc DWORD WaitForSingleObject(HANDLE handle, DWORD timeout) {
+    if (!is_valid_handle(handle)) return WAIT_FAILED;
     return win_wait_sync_obj(handle, timeout);
 }
 WINAPI(WaitForSingleObject)
 
+// --- FLS / TLS ---
 #define NUM_FLS_IDXS 128
 #define FLS_OUT_OF_INDEXES 0xffffffff
 
 typedef __winfnc void PflsCallbackFunction(void *flsData);
 
 static pthread_rwlock_t fls_lock = PTHREAD_RWLOCK_INITIALIZER;
-
 static int fls_next_free;
 static struct {
     int next_idx;
@@ -236,7 +234,6 @@ struct fls_value {
 };
 
 __constr static void init_fls() {
-    //Initialize indices
     fls_next_free = NUM_FLS_IDXS;
     for(int i = NUM_FLS_IDXS-1; i >= 0; i--) {
         fls_indices[i].next_idx = fls_next_free;
@@ -252,28 +249,21 @@ static void fls_destructor(void *ptr) {
 
 __winfnc DWORD FlsAlloc(PflsCallbackFunction *callback) {
     cant_fail_ret(pthread_rwlock_wrlock(&fls_lock));
-
-    //Try to obtain an index
     DWORD idx = FLS_OUT_OF_INDEXES;
     if(fls_next_free < NUM_FLS_IDXS) {
         idx = fls_next_free;
         fls_next_free = fls_indices[idx].next_idx;
-
         fls_indices[idx].next_idx = -1;
         cant_fail_ret(pthread_key_create(&fls_indices[idx].key, fls_destructor));
         fls_indices[idx].callback = callback;
     } else log_warn("Ran out of FLS indices!");
-
     cant_fail_ret(pthread_rwlock_unlock(&fls_lock));
-
     return idx;
 }
 WINAPI(FlsAlloc);
 
 __winfnc BOOL FlsFree(DWORD idx) {
     cant_fail_ret(pthread_rwlock_wrlock(&fls_lock));
-
-    //Free the index
     BOOL suc;
     if(0 <= idx && idx < NUM_FLS_IDXS && fls_indices[idx].next_idx < 0) {
         cant_fail_ret(pthread_key_delete(fls_indices[idx].key));
@@ -281,9 +271,7 @@ __winfnc BOOL FlsFree(DWORD idx) {
         fls_next_free = idx;
         suc = TRUE;
     } else suc = FALSE;
-
     cant_fail_ret(pthread_rwlock_unlock(&fls_lock));
-
     if(!suc) winerr_set();
     return suc;
 }
@@ -291,29 +279,25 @@ WINAPI(FlsFree);
 
 __winfnc void *FlsGetValue(DWORD idx) {
     cant_fail_ret(pthread_rwlock_rdlock(&fls_lock));
-
-    //Get the index's value
     void *data = NULL;
     if(0 <= idx && idx < NUM_FLS_IDXS && fls_indices[idx].next_idx < 0) {
         struct fls_value *val = (struct fls_value*) pthread_getspecific(fls_indices[idx].key);
         if(val) data = val->data;
     } else winerr_set();
-
     cant_fail_ret(pthread_rwlock_unlock(&fls_lock));
-
     return data;
 }
 WINAPI(FlsGetValue);
 
 __winfnc BOOL FlsSetValue(DWORD idx, void *data) {
     cant_fail_ret(pthread_rwlock_rdlock(&fls_lock));
-
-    //Set the index's value
     BOOL suc;
     if(0 <= idx && idx < NUM_FLS_IDXS && fls_indices[idx].next_idx < 0) {
-        free(pthread_getspecific(fls_indices[idx].key));
-
-        struct fls_value *val = (struct fls_value*) malloc(sizeof(struct fls_value));
+        struct fls_value *val = (struct fls_value*) pthread_getspecific(fls_indices[idx].key);
+        if (val) free(val); // Avoid double-free or leak, simplified
+        
+        // Re-allocate to ensure fresh state
+        val = (struct fls_value*) malloc(sizeof(struct fls_value));
         if(!val) {
             winerr_set_errno();
             suc = FALSE;
@@ -327,9 +311,7 @@ __winfnc BOOL FlsSetValue(DWORD idx, void *data) {
         winerr_set();
         suc = FALSE;
     }
-
     cant_fail_ret(pthread_rwlock_unlock(&fls_lock));
-
     return suc;
 }
 WINAPI(FlsSetValue);
@@ -346,52 +328,36 @@ WINAPI(TlsGetValue)
 __winfnc BOOL TlsSetValue(DWORD idx, void *data) { return FlsSetValue(idx, data); }
 WINAPI(TlsSetValue)
 
-/* --- ADD THIS TO THE END OF sync.c --- */
-
 __winfnc BOOL InitializeCriticalSectionAndSpinCount(void *lpCriticalSection, DWORD dwSpinCount) {
-    // Reuse the existing standard initialization
     InitializeCriticalSection(lpCriticalSection);
     return TRUE;
 }
 WINAPI(InitializeCriticalSectionAndSpinCount)
 
-/* --- ADD THIS TO THE END OF sync.c --- */
-
 __winfnc DWORD WaitForMultipleObjects(DWORD nCount, const HANDLE *lpHandles, BOOL bWaitAll, DWORD dwMilliseconds) {
-    // CRITICAL STUB: This is likely where the driver hangs or crashes.
-    // We implement a simple polling loop.
-    
     unsigned long long start_time;
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     start_time = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 
     while (1) {
-        // 1. Check if any object is signaled
-        // int signaled_index = -1;
         int signaled_count = 0;
-
         for (DWORD i = 0; i < nCount; i++) {
-            // Check status using WaitForSingleObject with 0 timeout (instant check)
             DWORD status = WaitForSingleObject(lpHandles[i], 0);
             if (status == 0) { // WAIT_OBJECT_0
-                if (!bWaitAll) return 0 + i; // Return immediately for "Wait Any"
+                if (!bWaitAll) return 0 + i;
                 signaled_count++;
             }
         }
 
-        if (bWaitAll && signaled_count == nCount) {
-            return 0; // WAIT_OBJECT_0 (All signaled)
-        }
+        if (bWaitAll && signaled_count == nCount) return 0;
 
-        // 2. Check timeout
         clock_gettime(CLOCK_MONOTONIC, &ts);
         unsigned long long current_time = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
         if (dwMilliseconds != 0xFFFFFFFF && (current_time - start_time) >= dwMilliseconds) {
             return 0x00000102L; // WAIT_TIMEOUT
         }
 
-        // 3. Sleep briefly to prevent 100% CPU usage
         struct timespec sleep_ts = {0, 10000000}; // 10ms
         nanosleep(&sleep_ts, NULL);
     }

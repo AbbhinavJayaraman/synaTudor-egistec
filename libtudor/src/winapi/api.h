@@ -45,7 +45,7 @@ struct _HANDLE {
     void *data;
     winhandle_destr_fnc *destr;
 };
-#define INVALID_HANDLE_VALUE ((HANDLE) (uintptr_t) -1)
+// INVALID_HANDLE_VALUE removed (moved to windows.h)
 
 HANDLE winhandle_create(void *data, winhandle_destr_fnc *destr);
 void winhandle_destroy(HANDLE handle);

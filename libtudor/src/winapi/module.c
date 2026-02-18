@@ -1,5 +1,6 @@
 #include <pthread.h>
 #include <stdio.h>
+#include <stdint.h>
 #include "internal.h"
 
 static pthread_rwlock_t modules_lock = PTHREAD_RWLOCK_INITIALIZER;
@@ -7,8 +8,6 @@ static struct winmodule *modules_head;
 
 static void module_destr(struct winmodule *module) {
     if(module->cmdline) return;
-
-    //Free the module
     module->handle = NULL;
     winmodule_unregister(module);
     free((void*) module->name);
@@ -17,9 +16,7 @@ static void module_destr(struct winmodule *module) {
 
 struct winmodule *winmodule_find(const char *name) {
     if (!name) return NULL;
-
     cant_fail_ret(pthread_rwlock_rdlock(&modules_lock));
-
     struct winmodule *module = NULL;
     for(struct winmodule *m = modules_head; m != NULL; m = m->next) {
         if(strcmp(m->name, name) == 0) {
@@ -27,36 +24,29 @@ struct winmodule *winmodule_find(const char *name) {
             break;
         }
     }
-
     cant_fail_ret(pthread_rwlock_unlock(&modules_lock));
     return module;
 }
 
 void winmodule_register(struct winmodule *module) {
     cant_fail_ret(pthread_rwlock_wrlock(&modules_lock));
-
     module->handle = winhandle_create(module, (winhandle_destr_fnc*) module_destr);
-
     module->prev = NULL;
     module->next = modules_head;
     if(modules_head) modules_head->prev = module;
     modules_head = module;
-
     cant_fail_ret(pthread_rwlock_unlock(&modules_lock));
 }
 
 void winmodule_unregister(struct winmodule *module) {
     cant_fail_ret(pthread_rwlock_wrlock(&modules_lock));
-
     if(module->handle) {
         winhandle_destroy(module->handle);
         module->handle = NULL;
     }
-
     if(module->prev) module->prev->next = module->next;
     else modules_head = module->next;
     if(module->next) module->next->prev = module->prev;
-
     cant_fail_ret(pthread_rwlock_unlock(&modules_lock));
 }
 
@@ -72,8 +62,6 @@ void winmodule_set_cur(struct winmodule *module) {
 }
 
 __winfnc HANDLE LoadLibraryExW(const char16_t *name, HANDLE file, DWORD flags) {
-    //We don't support loading librarys dynamically, but some stdlib functions have to be loaded that way
-    //As such return dummy modules
     struct winmodule *module = (struct winmodule*) malloc(sizeof(struct winmodule));
     if(!module) { winerr_set_errno(); return NULL; }
     *module = (struct winmodule) {0};
@@ -109,11 +97,9 @@ __winfnc BOOL GetModuleHandleExW(DWORD flags, const char16_t *name, HANDLE *out)
         log_warn("GetModuleHandleExW called with unsupported flag GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS! [addr=%p]", name);
         return FALSE;
     }
-
     char *cname = winstr_to_str(name);
     struct winmodule *module = (struct winmodule*) winmodule_find(cname);
     free(cname);
-
     if(module) *out = module->handle;
     return module != NULL;
 }
@@ -121,9 +107,7 @@ WINAPI(GetModuleHandleExW)
 
 __winfnc DWORD GetModuleFileNameA(HANDLE handle, char *name, DWORD size) {
     struct winmodule *module = handle ? (struct winmodule*) handle->data : cur_module;
- 
     int name_len = strlen(module->name);
-
     if(size == 0) {
         winerr_set_code(ERROR_INSUFFICIENT_BUFFER);
         return 0;
@@ -142,10 +126,8 @@ WINAPI(GetModuleFileNameA)
 
 __winfnc DWORD GetModuleFileNameW(HANDLE handle, char16_t *name, DWORD size) {
     struct winmodule *module = handle ? (struct winmodule*) handle->data : cur_module;
- 
     char16_t *wname = winstr_from_str(module->name);
     int wname_len = winstr_len(wname);
-
     if(size == 0) {
         free(wname);
         winerr_set_code(ERROR_INSUFFICIENT_BUFFER);
@@ -170,10 +152,9 @@ __winfnc BOOL DisableThreadLibraryCalls(HANDLE handle) {
 }
 WINAPI(DisableThreadLibraryCalls)
 
-// --- FIX: Clean Spy Logging without Warnings ---
+// --- SAFER SPY LOGGING ---
 __winfnc void *GetProcAddress(HANDLE handle, const char *name) {
     if (handle) {
-        // Check if it's an ordinal import
         uintptr_t nbits = (uintptr_t) name;
         if(!(nbits & ~((128ull << sizeof(uintptr_t)) - 1))) {
             struct winmodule *module = (struct winmodule*) handle->data;
@@ -183,7 +164,12 @@ __winfnc void *GetProcAddress(HANDLE handle, const char *name) {
         }
     }
 
-    // SPY LOGGING
+    // Safety check: is name a valid pointer?
+    if ((uintptr_t)name < 0x1000) {
+        fprintf(stderr, "[SPY] GetProcAddress: CALLED WITH BAD POINTER %p\n", name);
+        return NULL;
+    }
+
     fprintf(stderr, "[SPY] GetProcAddress: Requesting '%s'...", name);
 
     void *resolv = resolve_windows_api(name);
@@ -191,7 +177,7 @@ __winfnc void *GetProcAddress(HANDLE handle, const char *name) {
     if (resolv) {
         fprintf(stderr, " FOUND (%p)\n", resolv);
     } else {
-        fprintf(stderr, " NOT FOUND (Returning NULL)\n"); // Fixed format string
+        fprintf(stderr, " NOT FOUND (Returning NULL)\n");
         winerr_set();
     }
 
