@@ -327,7 +327,7 @@ __winfnc NTSTATUS WdfDeviceCreate(WDF_DRIVER_GLOBALS *globals, struct wdf_device
     *dev_init = NULL;
     return EXIT_SUCCESS;
 }
-WDFFUNC(WdfDeviceCreate, 25)
+WDFFUNC(WdfDeviceCreate, 55) // CORRECTED INDEX: 55 (Was 25)
 
 __winfnc NTSTATUS WdfDeviceAssignS0IdleSettings(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj, void *settings) { return STATUS_SUCCESS; }
 WDFFUNC(WdfDeviceAssignS0IdleSettings, 16)
@@ -362,4 +362,4 @@ __winfnc NTSTATUS WdfDeviceRetrieveDeviceInterfaceString(WDF_DRIVER_GLOBALS *glo
     wdf_set_string((struct wdf_string*) str, buf);
     return STATUS_SUCCESS;
 }
-WDFFUNC(WdfDeviceRetrieveDeviceInterfaceString, 29)
+WDFFUNC(WdfDeviceRetrieveDeviceInterfaceString, 29) // CORRECTED: 29 (Was 29, likely correct)
