@@ -68,7 +68,7 @@ __winfnc NTSTATUS WdfDriverCreate(WDF_DRIVER_GLOBALS *globals, DRIVER_OBJECT *dr
     if(out) *out = &driver->object;
     return STATUS_SUCCESS;
 }
-WDFFUNC(WdfDriverCreate, 0) // CORRECTED INDEX: 0 (Was 57)
+WDFFUNC(WdfDriverCreate, 57) // CORRECTED INDEX: 0 (Was 57)
 
 __winfnc void* WdfDriverGetRegistryPath(struct winwdf_driver *driver) {
     return driver ? driver->reg_key : NULL;

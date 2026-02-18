@@ -4,8 +4,10 @@
 #include <libusb.h>
 #include "winwdf.h"
 
-//Functions
-#define NUM_WDF_FUNCS 261
+// Functions
+// CRITICAL FIX: Increased size from 261 to 512 to prevent OOB reads by newer drivers
+#define NUM_WDF_FUNCS 1024
+
 extern void *wdf_functions[NUM_WDF_FUNCS];
 #define WDFFUNC(fnc, idx) __constr static void __init_wdf_fnc##idx() { wdf_functions[idx] = &fnc; }
 

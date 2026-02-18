@@ -161,4 +161,4 @@ __winfnc void *WdfObjectGetTypedContextWorker(WDF_DRIVER_GLOBALS *globals, struc
     cant_fail_ret(pthread_mutex_unlock(&obj->contexts_lock));
     return ctx_data;
 }
-WDFFUNC(WdfObjectGetTypedContextWorker, 123)
+WDFFUNC(WdfObjectGetTypedContextWorker, 260)
