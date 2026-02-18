@@ -41,6 +41,9 @@ struct wdf_object {
     //Event queue
     pthread_mutex_t evtqueue_lock;
     struct wdf_evtqueue_action *evtqueue_acts_head;
+
+    // Reference Counting
+    LONG ref_count;
 };
 
 void wdf_create_obj(struct wdf_object *parent, struct wdf_object *obj, wdf_obj_destr_fnc *destr, WDF_OBJECT_ATTRIBUTES *attrs);
@@ -48,6 +51,10 @@ void wdf_cleanup_obj(struct wdf_object *obj);
 
 void wdf_init_obj_list(struct wdf_object_list *list);
 void wdf_destroy_obj_list(struct wdf_object_list *list);
+
+// Ref Counting Helpers
+void wdf_object_ref(struct wdf_object *obj);
+void wdf_object_unref(struct wdf_object *obj);
 
 //Event queue
 typedef void wdf_evtqueue_action_fnc(struct wdf_object *obj);
