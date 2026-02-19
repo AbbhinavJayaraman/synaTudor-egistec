@@ -261,9 +261,11 @@ WDF_OBJECT_ATTRIBUTES *wdf_get_fs_obj_attrs(struct winwdf_device *dev) { return 
 
 __winfnc void WdfDeviceInitSetPowerPolicyOwnership(WDF_DRIVER_GLOBALS *globals, struct wdf_device_init *dev_init, BOOL IsPowerPolicyOwner) {}
 WDFFUNC(WdfDeviceInitSetPowerPolicyOwnership, 21)
+WINAPI(WdfDeviceInitSetPowerPolicyOwnership)
 
 __winfnc void WdfDeviceInitSetIoType(WDF_DRIVER_GLOBALS *globals, struct wdf_device_init *dev_init, ULONG IoType) {}
 WDFFUNC(WdfDeviceInitSetIoType, 22)
+WINAPI(WdfDeviceInitSetIoType)
 
 __winfnc void WdfDeviceInitSetPnpPowerEventCallbacks(WDF_DRIVER_GLOBALS *globals, struct wdf_device_init *dev_init, WDF_PNPPOWER_EVENT_CALLBACKS *callbacks) {
     free(dev_init->pnp_callbacks);
@@ -272,6 +274,7 @@ __winfnc void WdfDeviceInitSetPnpPowerEventCallbacks(WDF_DRIVER_GLOBALS *globals
     memcpy(dev_init->pnp_callbacks, callbacks, callbacks->Size);
 }
 WDFFUNC(WdfDeviceInitSetPnpPowerEventCallbacks, 19)
+WINAPI(WdfDeviceInitSetPnpPowerEventCallbacks)
 
 __winfnc void WdfDeviceInitSetPowerPolicyEventCallbacks(WDF_DRIVER_GLOBALS *globals, struct wdf_device_init *dev_init, WDF_POWER_POLICY_EVENT_CALLBACKS *callbacks) {
     free(dev_init->power_callbacks);
@@ -280,6 +283,7 @@ __winfnc void WdfDeviceInitSetPowerPolicyEventCallbacks(WDF_DRIVER_GLOBALS *glob
     memcpy(dev_init->power_callbacks, callbacks, callbacks->Size);
 }
 WDFFUNC(WdfDeviceInitSetPowerPolicyEventCallbacks, 20)
+WINAPI(WdfDeviceInitSetPowerPolicyEventCallbacks)
 
 __winfnc void WdfDeviceInitSetFileObjectConfig(WDF_DRIVER_GLOBALS *globals, struct wdf_device_init *dev_init, WDF_FILEOBJECT_CONFIG *config, WDF_OBJECT_ATTRIBUTES *obj_attrs) {
     free(dev_init->fs_cfg);
@@ -290,6 +294,7 @@ __winfnc void WdfDeviceInitSetFileObjectConfig(WDF_DRIVER_GLOBALS *globals, stru
     if(obj_attrs) memcpy(dev_init->fs_obj_attrs, obj_attrs, obj_attrs->Size);
 }
 WDFFUNC(WdfDeviceInitSetFileObjectConfig, 23)
+WINAPI(WdfDeviceInitSetFileObjectConfig)
 
 __winfnc NTSTATUS WdfDeviceCreate(WDF_DRIVER_GLOBALS *globals, struct wdf_device_init **dev_init, WDF_OBJECT_ATTRIBUTES *obj_attrs, WDFOBJECT *out) {
     //Create a device object
@@ -327,34 +332,44 @@ __winfnc NTSTATUS WdfDeviceCreate(WDF_DRIVER_GLOBALS *globals, struct wdf_device
     *dev_init = NULL;
     return EXIT_SUCCESS;
 }
-WDFFUNC(WdfDeviceCreate, 55) // CORRECTED INDEX: 55 (Was 25)
+WDFFUNC(WdfDeviceCreate, 55)
+WINAPI(WdfDeviceCreate) // <--- ADDED: Fixes IAT resolution
 
 __winfnc NTSTATUS WdfDeviceAssignS0IdleSettings(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj, void *settings) { return STATUS_SUCCESS; }
 WDFFUNC(WdfDeviceAssignS0IdleSettings, 16)
+WINAPI(WdfDeviceAssignS0IdleSettings)
 
 __winfnc NTSTATUS WdfDeviceAssignSxWakeSettings(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj, void *settings) { return STATUS_SUCCESS; }
 WDFFUNC(WdfDeviceAssignSxWakeSettings, 17)
+WINAPI(WdfDeviceAssignSxWakeSettings)
 
 __winfnc ULONG WdfDeviceGetSystemPowerAction(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj) { return 0; /* PowerActionNone */ }
 WDFFUNC(WdfDeviceGetSystemPowerAction, 41)
+WINAPI(WdfDeviceGetSystemPowerAction)
 
 __winfnc void WdfDeviceStopIdleNoTrack(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj) {}
 WDFFUNC(WdfDeviceStopIdleNoTrack, 88)
+WINAPI(WdfDeviceStopIdleNoTrack)
 
 __winfnc void WdfDeviceResumeIdleNoTrack(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj) {}
 WDFFUNC(WdfDeviceResumeIdleNoTrack, 89)
+WINAPI(WdfDeviceResumeIdleNoTrack)
 
 __winfnc NTSTATUS WdfDeviceStopIdleActual(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj, BOOLEAN wait_d0) { return STATUS_SUCCESS; }
 WDFFUNC(WdfDeviceStopIdleActual, 248)
+WINAPI(WdfDeviceStopIdleActual)
 
 __winfnc void WdfDeviceResumeIdleActual(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj) {}
 WDFFUNC(WdfDeviceResumeIdleActual, 249)
+WINAPI(WdfDeviceResumeIdleActual)
 
 __winfnc NTSTATUS WdfDeviceCreateDeviceInterface(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj, const GUID *interface_guid, const UNICODE_STRING *ref_str) { return STATUS_SUCCESS; }
 WDFFUNC(WdfDeviceCreateDeviceInterface, 27)
+WINAPI(WdfDeviceCreateDeviceInterface)
 
 __winfnc void WdfDeviceSetDeviceInterfaceState(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj, const GUID *interface_guid, const UNICODE_STRING *ref_str, BOOLEAN is_enabled) {}
 WDFFUNC(WdfDeviceSetDeviceInterfaceState, 28)
+WINAPI(WdfDeviceSetDeviceInterfaceState)
 
 __winfnc NTSTATUS WdfDeviceRetrieveDeviceInterfaceString(WDF_DRIVER_GLOBALS *globals, WDFOBJECT device_obj, const GUID *interface_guid, const UNICODE_STRING *ref_str, WDFOBJECT str) {
     char buf[64];
@@ -362,4 +377,5 @@ __winfnc NTSTATUS WdfDeviceRetrieveDeviceInterfaceString(WDF_DRIVER_GLOBALS *glo
     wdf_set_string((struct wdf_string*) str, buf);
     return STATUS_SUCCESS;
 }
-WDFFUNC(WdfDeviceRetrieveDeviceInterfaceString, 29) // CORRECTED: 29 (Was 29, likely correct)
+WDFFUNC(WdfDeviceRetrieveDeviceInterfaceString, 29)
+WINAPI(WdfDeviceRetrieveDeviceInterfaceString)

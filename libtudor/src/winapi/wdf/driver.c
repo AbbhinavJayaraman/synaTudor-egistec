@@ -68,11 +68,12 @@ __winfnc NTSTATUS WdfDriverCreate(WDF_DRIVER_GLOBALS *globals, DRIVER_OBJECT *dr
     if(out) *out = &driver->object;
     return STATUS_SUCCESS;
 }
-WDFFUNC(WdfDriverCreate, 0)
+WDFFUNC(WdfDriverCreate, 57)
+WINAPI(WdfDriverCreate) // <--- ADDED: Fixes IAT resolution
 
-// --- Added for Linker ---
 __winfnc void* WdfDriverGetRegistryPath(WDFOBJECT Driver) {
     struct winwdf_driver *driver = (struct winwdf_driver*) Driver;
     return driver ? driver->reg_key : NULL;
 }
-WDFFUNC(WdfDriverGetRegistryPath, 1)
+WDFFUNC(WdfDriverGetRegistryPath, 58) 
+WINAPI(WdfDriverGetRegistryPath) // <--- ADDED
