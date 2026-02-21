@@ -248,6 +248,18 @@ WINAPI(WriteFile)
 
 __winfnc BOOL DeviceIoControl(HANDLE handle, DWORD code, const void *in_buf, DWORD in_size, void *out_buf, DWORD out_size, DWORD *out_ret, OVERLAPPED *ovlp) {
     struct winfile *file = (struct winfile*) handle->data;
+    
+    // --- EGIS ACTIVE DRIVER PATCH ---
+    if (code == 0x44000c) {
+        log_info("[ACTIVE] Trapped Egis IOCTL 0x44000c!");
+        
+        // For this test, we just pretend the USB transfer succeeded.
+        // If the DLL survives this, we will wire up libusb.
+        if (out_ret) *out_ret = in_size; 
+        return TRUE;
+    }
+    // --------------------------------
+
     if(!file->devctrl_fnc) { winerr_set(); return FALSE; }
 
     //Setup overlapped
