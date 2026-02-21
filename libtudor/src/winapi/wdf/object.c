@@ -19,13 +19,37 @@ void wdf_object_unref(struct wdf_object *obj) {
 void wdf_create_obj(struct wdf_object *parent, struct wdf_object *obj, wdf_obj_destr_fnc *destr, WDF_OBJECT_ATTRIBUTES *attrs) {
     *obj = (struct wdf_object) {0};
     obj->destr = destr;
-    if(attrs) obj->attrs = *attrs;
-    else obj->attrs.SynchronizationScope = WdfSynchronizationScopeInheritFromParent; 
-
+    
+    // Initialize mutexes EXACTLY ONCE
     cant_fail_ret(pthread_mutex_init(&obj->contexts_lock, NULL));
     cant_fail_ret(pthread_mutex_init(&obj->evtqueue_lock, NULL));
     
+    // KEEP THIS! Base WDF reference count.
     obj->ref_count = 1; 
+
+    if(attrs) {
+        obj->attrs = *attrs;
+        
+        // --- CONTEXT ALLOCATION PATCH v2 ---
+        // WDF specifies size in either Override OR TypeInfo. We must check both.
+        size_t ctx_size = attrs->ContextSizeOverride;
+        if (ctx_size == 0 && attrs->ContextTypeInfo != NULL) {
+            ctx_size = attrs->ContextTypeInfo->ContextSize;
+        }
+
+        if (ctx_size > 0 || attrs->ContextTypeInfo != NULL) {
+            struct wdf_object_context *ctx = malloc(sizeof(struct wdf_object_context));
+            // Allocate at least 8 bytes if size is missing but type is requested
+            ctx->data = calloc(1, ctx_size > 0 ? ctx_size : 8); 
+            ctx->type = attrs->ContextTypeInfo;
+            ctx->attrs = *attrs;
+            ctx->next = NULL;
+            obj->context_head = ctx;
+        }
+        // ------------------------------------
+    } else {
+        obj->attrs.SynchronizationScope = WdfSynchronizationScopeInheritFromParent; 
+    }
 
     //Add to parent list
     if(parent) {
@@ -139,6 +163,30 @@ __winfnc void WdfObjectDereferenceActual(WDF_DRIVER_GLOBALS *globals, WDFOBJECT 
 WDFFUNC(WdfObjectDereferenceActual, 86)
 
 __winfnc void* WdfObjectGetTypedContextWorker(WDF_DRIVER_GLOBALS *globals, WDFOBJECT Handle, WDF_OBJECT_CONTEXT_TYPE_INFO *TypeInfo) {
-    return (void*) Handle;
+    struct wdf_object *obj = (struct wdf_object*) Handle;
+    if (!obj) return NULL;
+
+    void *ret_data = NULL;
+    cant_fail_ret(pthread_mutex_lock(&obj->contexts_lock));
+    
+    struct wdf_object_context *ctx = obj->context_head;
+    while(ctx) {
+        // If TypeInfo is NULL, just return the first context (common fallback).
+        // Otherwise, try to match the type info.
+        if(!TypeInfo || ctx->type == TypeInfo) {
+            ret_data = ctx->data;
+            break;
+        }
+        ctx = ctx->next;
+    }
+    
+    cant_fail_ret(pthread_mutex_unlock(&obj->contexts_lock));
+    
+    if (!ret_data) {
+        fprintf(stderr, "[WDF] FATAL: Driver requested context type %p but it was not found on object %p!\n", TypeInfo, Handle);
+        abort(); // Better to abort cleanly here than segfault later
+    }
+    
+    return ret_data;
 }
-WDFFUNC(WdfObjectGetTypedContextWorker, 260)
+WDFFUNC(WdfObjectGetTypedContextWorker, 123) // Ensure the index is 123 for UMDF 2.0!
