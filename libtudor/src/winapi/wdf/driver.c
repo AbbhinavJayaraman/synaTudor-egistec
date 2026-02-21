@@ -62,7 +62,13 @@ __winfnc NTSTATUS WdfDriverCreate(WDF_DRIVER_GLOBALS *globals, DRIVER_OBJECT *dr
 
     driver->globals = globals;
     driver->cfg = *cfg;
-    driver->reg_key = winreg_open_key(driver, winstr_to_str(reg_path->Buffer));
+    
+    // --- SAFETY PATCH START ---
+    // Protect against NULL registry paths and prevent memory leaks
+    char *path_str = (reg_path && reg_path->Buffer) ? winstr_to_str(reg_path->Buffer) : NULL;
+    driver->reg_key = winreg_open_key(driver, path_str ? path_str : "HKLM\\System\\EgisSensor");
+    if (path_str) free(path_str);
+    // --- SAFETY PATCH END ---
 
     globals->Driver = driver;
     if(out) *out = &driver->object;
