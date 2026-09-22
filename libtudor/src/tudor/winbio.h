@@ -107,6 +107,11 @@
 #define WINBIO_SUBTYPE_NO_INFORMATION 0x00
 #define WINBIO_SUBTYPE_ANY 0xFF
 
+//Fingerprint sensor subtypes. The EH575 is a touch (press) sensor, which is
+//also what the INF declares via WinBio\Configurations\0\SensorMode.
+#define WINBIO_FP_SENSOR_SUBTYPE_SWIPE 0x00000001
+#define WINBIO_FP_SENSOR_SUBTYPE_TOUCH 0x00000002
+
 #define WINBIO_CAPABILITY_SENSOR 0x00000001
 #define WINBIO_CAPABILITY_MATCHING 0x00000002
 #define WINBIO_CAPABILITY_DATABASE 0x00000004
@@ -309,7 +314,76 @@ typedef struct {
     USHORT Type;
 } WINBIO_REGISTERED_FORMAT;
 
-typedef union { 
+//Biometric device IOCTLs, as issued by the sensor and engine adapters against
+//WINBIO_PIPELINE::SensorHandle. FILE_DEVICE_BIOMETRIC is 0x44, all of these
+//are METHOD_BUFFERED / FILE_ANY_ACCESS, so the code is 0x44xxxx.
+#define IOCTL_BIOMETRIC_GET_ATTRIBUTES    0x440004
+#define IOCTL_BIOMETRIC_RESET             0x440008
+#define IOCTL_BIOMETRIC_CALIBRATE         0x44000c
+#define IOCTL_BIOMETRIC_GET_SENSOR_STATUS 0x440010
+#define IOCTL_BIOMETRIC_CAPTURE_DATA      0x440014
+#define IOCTL_BIOMETRIC_GET_INDICATOR     0x44001c
+#define IOCTL_BIOMETRIC_SET_INDICATOR     0x440020
+#define IOCTL_BIOMETRIC_UPDATE_FIRMWARE   0x440024
+
+#define WINBIO_MAX_STRING_LEN 256
+
+//ANSI INCITS 381 finger image format - what the Windows sensor adapter
+//advertises in SupportedFormat (it writes the DWORD 0x0401001b, i.e.
+//Owner 0x001b / Type 0x0401, in EgisTouchFPSensor0575's GET_ATTRIBUTES path).
+#define WINBIO_ANSI_381_FORMAT_OWNER 0x001b
+#define WINBIO_ANSI_381_FORMAT_TYPE  0x0401
+
+typedef struct {
+    ULONG PayloadSize;
+    HRESULT WinBioHresult;
+    WINBIO_VERSION WinBioVersion;
+    ULONG WinBioType;
+    ULONG WinBioSensorSubType;
+    ULONG WinBioCapabilities;
+    char16_t ManufacturerName[WINBIO_MAX_STRING_LEN];
+    char16_t ModelName[WINBIO_MAX_STRING_LEN];
+    char16_t SerialNumber[WINBIO_MAX_STRING_LEN];
+    WINBIO_VERSION FirmwareVersion;
+    ULONG SupportedFormatEntries;
+    WINBIO_REGISTERED_FORMAT SupportedFormat[1];
+} WINBIO_SENSOR_ATTRIBUTES;
+
+//Cross-check against the decompiled Windows adapter, which allocates a 0x62c
+//byte buffer, reads SupportedFormatEntries at +0x624, walks the format array
+//at +0x628, and hands the engine a model-name string at +0x21c. If any of
+//these trip, the struct no longer matches what the adapter expects.
+_Static_assert(offsetof(WINBIO_SENSOR_ATTRIBUTES, ModelName) == 0x21c, "WINBIO_SENSOR_ATTRIBUTES::ModelName must sit at +0x21c");
+_Static_assert(offsetof(WINBIO_SENSOR_ATTRIBUTES, SupportedFormatEntries) == 0x624, "WINBIO_SENSOR_ATTRIBUTES::SupportedFormatEntries must sit at +0x624");
+_Static_assert(offsetof(WINBIO_SENSOR_ATTRIBUTES, SupportedFormat) == 0x628, "WINBIO_SENSOR_ATTRIBUTES::SupportedFormat must sit at +0x628");
+_Static_assert(sizeof(WINBIO_SENSOR_ATTRIBUTES) == 0x62c, "WINBIO_SENSOR_ATTRIBUTES must be 0x62c bytes with one format entry");
+
+typedef struct {
+    ULONG PayloadSize;
+    ULONG WinBioType;
+    UCHAR Purpose;
+    UCHAR Subtype;
+    WINBIO_REGISTERED_FORMAT Format;
+    GUID VendorFormat;
+    ULONG Flags;
+} WINBIO_CAPTURE_PARAMETERS;
+
+//The Windows driver rejects a CAPTURE_DATA request whose input buffer is
+//smaller than 0x20 bytes, so the adapter always sends at least that much.
+_Static_assert(sizeof(WINBIO_CAPTURE_PARAMETERS) >= 0x20, "WINBIO_CAPTURE_PARAMETERS must be at least 0x20 bytes");
+
+typedef struct {
+    ULONG PayloadSize;
+    HRESULT WinBioHresult;
+    ULONG SensorStatus;
+    ULONG RejectDetail;
+    WINBIO_REGISTERED_FORMAT Format;
+    GUID VendorFormat;
+    SIZE_T CaptureBufferSize;
+    UCHAR CaptureBuffer[1];
+} WINBIO_CAPTURE_DATA;
+
+typedef union {
     ULONG Null;
 
     struct {

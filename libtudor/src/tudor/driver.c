@@ -2,9 +2,12 @@
 
 // void register_shims();
 
+//Only the two WinBIO adapters are relinked. EgisTouchFP0575.dll - the UMDF
+//driver - is deliberately not loaded: its entire job was translating biometric
+//IOCTLs into EGIS bulk transfers, which src/tudor/egis.c now does natively.
+//Dropping it is what removes the need for the WDF/UMDF emulation layer.
 extern uint8_t _binary____libtudor_drivers_EgisTouchFPSensor0575_dll_start, _binary____libtudor_drivers_EgisTouchFPSensor0575_dll_end;
-extern uint8_t _binary____libtudor_drivers_EgisTouchFPEngine0575_dll_start, _binary____libtudor_drivers_EgisTouchFPEngine0575_dll_end; // <--- Add this
-extern uint8_t _binary____libtudor_drivers_EgisTouchFP0575_dll_start, _binary____libtudor_drivers_EgisTouchFP0575_dll_end;
+extern uint8_t _binary____libtudor_drivers_EgisTouchFPEngine0575_dll_start, _binary____libtudor_drivers_EgisTouchFPEngine0575_dll_end;
 
 struct windrv_dll tudor_windrv_dlls[] = {
     {
@@ -16,7 +19,7 @@ struct windrv_dll tudor_windrv_dlls[] = {
         .pe_image = &_binary____libtudor_drivers_EgisTouchFPSensor0575_dll_start, .pe_image_end = &_binary____libtudor_drivers_EgisTouchFPSensor0575_dll_end,
         .is_adapter = true, .is_driver = false, .is_engine = false
     },
-    {   // <--- Add this block
+    {
         .module = {
             .name = "EgisTouchFPEngine0575.dll",
             .cmdline = "EgisTouchFPEngine0575.dll",
@@ -24,15 +27,6 @@ struct windrv_dll tudor_windrv_dlls[] = {
         },
         .pe_image = &_binary____libtudor_drivers_EgisTouchFPEngine0575_dll_start, .pe_image_end = &_binary____libtudor_drivers_EgisTouchFPEngine0575_dll_end,
         .is_adapter = false, .is_driver = false, .is_engine = true
-    },
-    {
-        .module = {
-            .name = "EgisTouchFP0575.dll",
-            .cmdline = "EgisTouchFP0575.dll",
-            .environ = (const char*[]) { NULL }
-        },
-        .pe_image = &_binary____libtudor_drivers_EgisTouchFP0575_dll_start, .pe_image_end = &_binary____libtudor_drivers_EgisTouchFP0575_dll_end,
-        .is_adapter = false, .is_driver = true, .is_engine = false
     }
 };
 
@@ -50,12 +44,10 @@ static struct winmodule ntdll_module = {
 #define DLL_THREAD_DETACH 3
 typedef BOOL __winfnc (*api_DllMain)(HANDLE hinstDLL, int fdwReason, void *lpReserved);
 
-struct windrv_dll *tudor_adapter_dll, *tudor_driver_dll, *tudor_engine_dll; // <--- Add definition
+struct windrv_dll *tudor_adapter_dll, *tudor_engine_dll;
 WINBIO_SENSOR_INTERFACE *tudor_sensor_adapter;
 WINBIO_ENGINE_INTERFACE *tudor_engine_adapter;
 
-static DRIVER_OBJECT umdf_driver;
-struct winwdf_driver *tudor_wdf_driver;
 
 bool tudor_init() {
     //Register dummy modules
@@ -81,7 +73,7 @@ bool tudor_init() {
     winreg_set_handler(tudor_reg_handler, NULL);
 
     //Load driver DLLs
-    tudor_adapter_dll = tudor_driver_dll = tudor_engine_dll = NULL; // <--- Initialize
+    tudor_adapter_dll = tudor_engine_dll = NULL;
     for(int i = 0; i < NUM_WINDRV_DLLS; i++) {
         struct windrv_dll *dll = &tudor_windrv_dlls[i];
         if(!load_dll(&dll->image, dll->module.name, dll->pe_image, dll->pe_image_end - dll->pe_image)) {
@@ -92,12 +84,10 @@ bool tudor_init() {
         log_info("Loaded driver DLL '%s' [%ld bytes]", dll->module.name, dll->pe_image_end - dll->pe_image);
 
         if(dll->is_adapter) tudor_adapter_dll = dll;
-        if(dll->is_driver) tudor_driver_dll = dll;
-        if(dll->is_engine) tudor_engine_dll = dll; // <--- Capture engine DLL
+        if(dll->is_engine) tudor_engine_dll = dll;
     }
     if(!tudor_adapter_dll) abort();
-    if(!tudor_driver_dll) abort();
-    if(!tudor_engine_dll) abort(); // <--- Ensure it was found
+    if(!tudor_engine_dll) abort();
 
     //Initialize driver DLLs
     for(int i = 0; i < NUM_WINDRV_DLLS; i++) {
@@ -113,30 +103,6 @@ bool tudor_init() {
         }
     }
 
-    //Call UMDF driver entry function
-    init_winwdf();
-    winmodule_set_cur(&tudor_driver_dll->module);
-
-    char16_t *reg_path_wstr = winstr_from_str("HKEY_LOCAL_MACHINE\\Tudor\\Driver");
-    UNICODE_STRING reg_path = {
-        .Length = winstr_len(reg_path_wstr)+1,
-        .MaximumLength = winstr_len(reg_path_wstr)+1,
-        .Buffer = reg_path_wstr
-    };
-
-    NTSTATUS status;
-    if((status = ((api_FxDriverEntryUm) find_dll_export(&tudor_driver_dll->image, "FxDriverEntryUm"))(&wdf_loader, NULL, &umdf_driver, &reg_path)) != 0) {
-        log_error("Error in UMDF driver entry function: 0x%x!", status);
-        return false;
-    }
-
-    free(reg_path_wstr);
-
-    if(!(tudor_wdf_driver = winwdf_get_driver(&wdf_globals))) {
-        log_error("UMDF entry function didn't create a WDF driver!");
-        return false;
-    }
-
     //Query WINBIO interfaces
     winmodule_set_cur(&tudor_adapter_dll->module);
 
@@ -146,8 +112,7 @@ bool tudor_init() {
         return false;
     }
 
-    // Query WINBIO Engine Interface (Add this!)
-    // This loads the Enroll/Match functions from the Engine DLL
+    //Query the engine interface - this is where enrollment and matching live
     winmodule_set_cur(&tudor_engine_dll->module);
     if((hres = ((api_WbioQueryEngineInterface) find_dll_export(&tudor_engine_dll->image, "WbioQueryEngineInterface"))(&tudor_engine_adapter)) != 0) {
         log_error("Error querying engine interface: 0x%x!", hres);
@@ -159,18 +124,6 @@ bool tudor_init() {
 }
 
 bool tudor_shutdown() {
-    //Unload the driver
-    winmodule_set_cur(&tudor_driver_dll->module);
-
-    log_debug("Unloading WDF driver...");
-    winwdf_unload_driver(tudor_wdf_driver);
-
-    if(umdf_driver.DriverUnload) {
-        log_debug("Unloading UMDF driver...");
-        umdf_driver.DriverUnload(&umdf_driver);
-    }
-    umdf_driver = (DRIVER_OBJECT) {0};
-
     //Uninitialize driver DLLs
     for(int i = 0; i < NUM_WINDRV_DLLS; i++) {
         struct windrv_dll *dll = &tudor_windrv_dlls[i];

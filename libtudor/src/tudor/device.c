@@ -1,63 +1,31 @@
 #include <unistd.h>
 #include "internal.h"
+#include "egis.h"
 
-static void req_cb(struct winwdf_request *req, NTSTATUS status, OVERLAPPED *ovlp) {
-    //Get request info
-    const void *out_buf = NULL;
-    size_t out_buf_size, num_transfered = 0;
-    if(status == STATUS_SUCCESS) {
-        if(!winwdf_get_request_info(req, NULL, NULL, NULL, &out_buf, &out_buf_size, &num_transfered)) {
-            log_error("Couldn't get request info!");
-            abort();
-        }
-        if(num_transfered > out_buf_size) num_transfered = out_buf_size;
-    }
-
-    if(LOG_LEVEL <= LOG_VERBOSE) {
-        cant_fail_ret(pthread_mutex_lock(&LOG_LOCK));
-        printf("[DEVCTRL] <- status 0x%x out (size 0x%lx): ", status, num_transfered);
-        if(status == STATUS_SUCCESS) for(size_t i = 0; i < num_transfered; i++) printf("%02x", ((uint8_t*) out_buf)[i]);
-        puts("");
-        cant_fail_ret(pthread_mutex_unlock(&LOG_LOCK));
-    }
-
-    //Complete the OVERLAPPED
-    winio_complete_overlapped(ovlp, status, num_transfered);
-}
-
-static NTSTATUS tudor_devctrl(struct tudor_device *device, OVERLAPPED *ovlp, ULONG code, void *in_buf, size_t in_size, void *out_buf, size_t out_size, struct winwdf_request **req) {
+static NTSTATUS tudor_devctrl(struct tudor_device *device, OVERLAPPED *ovlp, ULONG code, const void *in_buf, size_t in_size, void *out_buf, size_t out_size, struct egis_request **req) {
     if(LOG_LEVEL <= LOG_VERBOSE) {
         cant_fail_ret(pthread_mutex_lock(&LOG_LOCK));
         printf("[DEVCTRL] -> in code 0x%x (size 0x%lx): ", code, in_size);
-        for(size_t i = 0; i < in_size; i++) printf("%02x", ((uint8_t*) in_buf)[i]);
+        for(size_t i = 0; i < in_size; i++) printf("%02x", ((const uint8_t*) in_buf)[i]);
         puts("");
         cant_fail_ret(pthread_mutex_unlock(&LOG_LOCK));
     }
 
-    //Start the request
-    struct winmodule *mod = winmodule_get_cur();
-    winmodule_set_cur(&tudor_driver_dll->module);
-    NTSTATUS status = winwdf_devctrl_file(device->wdf_file, code, in_buf, in_size, out_buf, out_size, req);
-    winmodule_set_cur(mod);
-
-    //Add callback
-    if(status == STATUS_SUCCESS) winwdf_add_request_callback(*req, (winwdf_request_cb_fnc*) req_cb, ovlp);
-
-    return status;
+    //Serviced natively against libusb - see egis.c. The Windows UMDF driver
+    //that used to sit here is no longer loaded.
+    return egis_devctrl(device->egis, ovlp, code, in_buf, in_size, out_buf, out_size, req);
 }
 
-static NTSTATUS tudor_cancel(struct tudor_device *device, OVERLAPPED *ovlp, struct winwdf_request *req) {
-    winwdf_cancel_request(req);
-    return STATUS_SUCCESS;
+static NTSTATUS tudor_cancel(struct tudor_device *device, OVERLAPPED *ovlp, struct egis_request *req) {
+    return egis_cancel(device->egis, ovlp, req);
 }
 
-static void tudor_cleanup(struct tudor_device *device, OVERLAPPED *ovlp, struct winwdf_request *req) {
-    winwdf_destroy_object((WDFOBJECT) req);
+static void tudor_cleanup(struct tudor_device *device, OVERLAPPED *ovlp, struct egis_request *req) {
+    egis_cleanup(device->egis, ovlp, req);
 }
 
 bool tudor_open(struct tudor_device *device, libusb_device_handle *usb_dev, struct tudor_device_state *state) {
     HRESULT hres;
-    NTSTATUS status;
 
     device->state = state ? *state : (struct tudor_device_state) {0};
     device->enrolling = false;
@@ -72,25 +40,17 @@ bool tudor_open(struct tudor_device *device, libusb_device_handle *usb_dev, stru
         return false;
     }
 
-    //Open the device through the driver
+    //Bring the sensor up ourselves instead of going through the UMDF driver.
     device->reg_key = winreg_open_key(device, "HKEY_LOCAL_MACHINE\\Tudor\\Device");
-    if((status = winwdf_add_device(tudor_wdf_driver, device->reg_key, usb_dev, &device->wdf_device)) != 0) {
-        log_error("Error adding WDF device: 0x%x!", status);
-        return false;
-    }
-    if(!device->wdf_device) {
-        log_error("Driver didn't create a WDF device!");
-        return false;
-    }
-    winwdf_event_queue_flush();
 
-    if((status = winwdf_open_device(device->wdf_device, &device->wdf_file)) != 0) {
-        log_error("Error opening WDF file: 0x%x!", status);
+    device->egis = (struct egis_device*) malloc(sizeof(struct egis_device));
+    if(!device->egis) abort_perror("Couldn't allocate EGIS device");
+    if(!egis_open(device->egis, usb_dev)) {
+        log_error("Error opening EGIS device!");
+        free(device->egis);
+        device->egis = NULL;
         return false;
     }
-
-    //This is dumb, but otherwise we run into race conditions
-    cant_fail(usleep(3000000));
 
     //Initialize the pipeline
     winmodule_set_cur(&tudor_adapter_dll->module);
@@ -132,7 +92,7 @@ bool tudor_open(struct tudor_device *device, libusb_device_handle *usb_dev, stru
     ULONG sensor_status = WINBIO_SENSOR_FAILURE;
     WINBIO_CALL_PIPELINE(tudor_sensor_adapter->QueryStatus, device->pipeline, &sensor_status)
     if(sensor_status != WINBIO_SENSOR_READY) {
-        log_error("Sensor didn't return ready status! [status 0x%x]", status);
+        log_error("Sensor didn't return ready status! [status 0x%x]", sensor_status);
         return false;
     }
 
@@ -164,14 +124,10 @@ bool tudor_close(struct tudor_device *device) {
 
     winhandle_destroy(device->winbio_file);
 
-    //Close the WDF file
-    winmodule_set_cur(&tudor_driver_dll->module);
-    winwdf_close_file(device->wdf_file);
-
-    //Remove the device
-    winmodule_set_cur(&tudor_driver_dll->module);
-    winwdf_remove_device(device->wdf_device);
-    winwdf_event_queue_flush();
+    //Shut the sensor down
+    egis_close(device->egis);
+    free(device->egis);
+    device->egis = NULL;
     winhandle_destroy(device->reg_key);
 
     //Free records

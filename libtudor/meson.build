@@ -1,6 +1,5 @@
 libtudor_src = [
     'src/log.c',
-    'src/wdf.c',
     'src/stub.c',
     'src/loader.c',
 
@@ -45,30 +44,21 @@ libtudor_src = [
     'src/winapi/bcrypt/ecc.c',
     'src/winapi/bcrypt/aes.c',
 
-    'src/winapi/wdf/string.c',
-    'src/winapi/wdf/driver.c',
-    'src/winapi/wdf/request.c',
-    'src/winapi/wdf/mem.c',
-    'src/winapi/wdf/device.c',
-    'src/winapi/wdf/object.c',
-    'src/winapi/wdf/log.c',
-    'src/winapi/wdf/file.c',
-    'src/winapi/wdf/evtqueue.c',
-    'src/winapi/wdf/queue.c',
-    'src/winapi/wdf/reg.c',
-    'src/winapi/wdf/usb.c',
 
     'src/tudor/async.c',
     'src/tudor/driver.c',
     'src/tudor/device.c',
     'src/tudor/storage.c',
+    'src/tudor/egis.c',
     'src/tudor/reg.c'
 ]
 
+# Only the two WinBIO adapters are embedded. EgisTouchFP0575.dll (the UMDF
+# driver) is no longer relinked - src/tudor/egis.c services its IOCTLs over
+# libusb instead, which is what lets the WDF emulation layer go away.
 driver_dll_names = [
     'EgisTouchFPSensor0575.dll',
-    'EgisTouchFPEngine0575.dll',  # <--- Add this
-    'EgisTouchFP0575.dll'
+    'EgisTouchFPEngine0575.dll'
 ]
 
 add_global_arguments('-Wno-incompatible-pointer-types', language : 'c')

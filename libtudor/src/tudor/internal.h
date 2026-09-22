@@ -1,10 +1,14 @@
 #ifndef LIBTUDOR_TUDOR_INTERNAL_H
 #define LIBTUDOR_TUDOR_INTERNAL_H
 
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
 #include <tudor/tudor.h>
+#include <tudor/log.h>
 #include "winbio.h"
 #include "loader.h"
-#include "wdf.h"
+#include "winapi/api.h"
 
 struct async_args_enroll {
     bool *done;
@@ -47,17 +51,18 @@ struct windrv_dll {
     struct winmodule module;
     uint8_t *pe_image, *pe_image_end;
     struct dll_image image;
-    bool is_adapter, is_driver, is_engine; // Added is_engine
+    bool is_adapter, is_driver, is_engine;
 };
 
-#define NUM_WINDRV_DLLS 3 // Correctly updated to 3
+//Sensor adapter + engine adapter. The UMDF driver DLL is not relinked - see
+//the comment at the top of driver.c.
+#define NUM_WINDRV_DLLS 2
 extern struct windrv_dll tudor_windrv_dlls[];
 
 #define WINBIO_CALL_PIPELINE(fnc, ...) if((hres = fnc(__VA_ARGS__)) != ERROR_SUCCESS) { log_error("Error in WINBIO pipeline function '%s': 0x%x!", #fnc, hres); return false; }
 
 // External declarations for global pointers
-extern struct windrv_dll *tudor_adapter_dll, *tudor_driver_dll, *tudor_engine_dll;
-extern struct winwdf_driver *tudor_wdf_driver;
+extern struct windrv_dll *tudor_adapter_dll, *tudor_engine_dll;
 extern WINBIO_SENSOR_INTERFACE *tudor_sensor_adapter;
 extern WINBIO_ENGINE_INTERFACE *tudor_engine_adapter;
 extern WINBIO_STORAGE_INTERFACE *tudor_storage_adapter;

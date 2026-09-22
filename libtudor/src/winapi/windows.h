@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <uchar.h>
 #include "attr.h"
 
@@ -88,6 +89,10 @@ enum {
     STATUS_PENDING = 0x00000103,
     STATUS_CANCELLED = 0xc0000120,
     STATUS_BUFFER_TOO_SMALL = 0xc0000023,
+    STATUS_UNSUCCESSFUL = 0xc0000001,
+    STATUS_NOT_SUPPORTED = 0xc00000bb,
+    STATUS_INVALID_PARAMETER = 0xc000000d,
+    STATUS_DEVICE_NOT_READY = 0xc00000a3,
     STATUS_INVALID_SIGNATURE = 0xc000a000
 };
 

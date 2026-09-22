@@ -15,6 +15,9 @@ typedef struct {
 typedef struct _WINBIO_IDENTITY WINBIO_IDENTITY;
 typedef struct _WINBIO_PIPELINE WINBIO_PIPELINE;
 
+//Native EgisTec backend, defined in src/tudor/egis.h
+struct egis_device;
+
 extern bool tudor_log_traces;
 bool tudor_init();
 bool tudor_shutdown();
@@ -73,8 +76,7 @@ struct tudor_device {
 
     //Driver data
     HANDLE reg_key;
-    struct winwdf_device *wdf_device;
-    struct winwdf_file *wdf_file;
+    struct egis_device *egis;
 
     //WinBIO data
     WINBIO_PIPELINE *pipeline;
