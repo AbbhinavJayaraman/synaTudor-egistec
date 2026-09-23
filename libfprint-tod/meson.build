@@ -24,6 +24,11 @@ tudor_tod = shared_module('tudor_tod',
     install_dir: libfprint_tod_dep.get_variable(pkgconfig: 'tod_driversdir')
 )
 
+#udev.pc exposes both 'udevdir' (/usr/lib/udev) and 'udev_rulesdir'
+#(/usr/lib/udev/rules.d). Rules only get read out of the latter - installing
+#into udevdir puts the file somewhere udev never looks, so LIBFPRINT_DRIVER
+#never gets set and the device permissions never get applied.
 install_data('60-tudor-libfprint-tod.rules',
-    install_dir: udev_dep.get_variable(pkgconfig: 'udevdir'),
+    install_dir: udev_dep.get_variable(pkgconfig: 'udev_rulesdir',
+        default_value: join_paths(udev_dep.get_variable(pkgconfig: 'udevdir'), 'rules.d')),
 )

@@ -1,2 +1,5 @@
-SUBSYSTEM=="usb", ATTRS{idVendor}=="1c7a", ATTRS{idProduct}=="0575", ATTRS{dev}=="*", TEST=="power/control", ATTR{power/control}="auto", MODE="0660", GROUP="plugdev"
+# EgisTec EH575 (USB 1c7a:0575)
+# 'input' rather than 'plugdev': plugdev is a Debian convention and does not
+# exist on Arch-family systems, where a rule naming it is skipped with an error.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1c7a", ATTRS{idProduct}=="0575", ATTRS{dev}=="*", TEST=="power/control", ATTR{power/control}="auto", MODE="0660", GROUP="input"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="1c7a", ATTRS{idProduct}=="0575", ENV{LIBFPRINT_DRIVER}="Tudor TOD"
