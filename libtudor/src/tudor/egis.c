@@ -28,8 +28,10 @@
 #define EGIS_POLL_INTERVAL_US 50000
 
 //A frame whose standard deviation is below this is taken to be an empty
-//platen. Tuned in the Python driver against this sensor.
+//platen. Tuned in the Python driver against this sensor. Compared as a
+//variance so no square root - and hence no libm - is needed.
 #define EGIS_TOUCH_THRESHOLD 31.0
+#define EGIS_TOUCH_VARIANCE (EGIS_TOUCH_THRESHOLD * EGIS_TOUCH_THRESHOLD)
 
 //--- USB transport -----------------------------------------------------------
 
@@ -162,11 +164,12 @@ bool egis_capture_frame(struct egis_device *dev, uint8_t *buf) {
     return ok;
 }
 
-//Standard deviation of a frame, used as the finger-present heuristic. The
-//Windows driver has a dedicated finger-detect register path (the INF sets
-//FingerOnThreshold=6 / FingerOnThresholdLoose=2); until that is mapped, this
-//mirrors what the Python driver does.
-static double egis_frame_contrast(const uint8_t *buf, size_t size) {
+//Variance of a frame, used as the finger-present heuristic. The Windows driver
+//has a dedicated finger-detect register path (the INF sets FingerOnThreshold=6
+/// FingerOnThresholdLoose=2); until that is mapped, this mirrors what the
+//Python driver does, comparing against the squared threshold so that libtudor
+//does not have to pull in libm.
+static double egis_frame_variance(const uint8_t *buf, size_t size) {
     double sum = 0.0;
     for(size_t i = 0; i < size; i++) sum += buf[i];
     double mean = sum / (double) size;
@@ -176,7 +179,7 @@ static double egis_frame_contrast(const uint8_t *buf, size_t size) {
         double d = (double) buf[i] - mean;
         var += d * d;
     }
-    return __builtin_sqrt(var / (double) size);
+    return var / (double) size;
 }
 
 //--- Device lifecycle --------------------------------------------------------
@@ -347,7 +350,7 @@ static void *egis_capture_thread(void *arg) {
         if(cancelled) { status = STATUS_CANCELLED; goto done; }
 
         if(!egis_capture_frame(dev, img)) goto done;
-        if(egis_frame_contrast(img, sizeof(img)) < EGIS_TOUCH_THRESHOLD) clear_streak++;
+        if(egis_frame_variance(img, sizeof(img)) < EGIS_TOUCH_VARIANCE) clear_streak++;
         else clear_streak = 0;
 
         usleep(EGIS_POLL_INTERVAL_US);
@@ -361,7 +364,7 @@ static void *egis_capture_thread(void *arg) {
         if(cancelled) { status = STATUS_CANCELLED; goto done; }
 
         if(!egis_capture_frame(dev, img)) goto done;
-        if(egis_frame_contrast(img, sizeof(img)) >= EGIS_TOUCH_THRESHOLD) break;
+        if(egis_frame_variance(img, sizeof(img)) >= EGIS_TOUCH_VARIANCE) break;
 
         usleep(EGIS_POLL_INTERVAL_US);
     }

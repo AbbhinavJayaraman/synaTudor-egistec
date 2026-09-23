@@ -3,17 +3,6 @@
 #include "internal.h"
 #include <stdio.h> // For debug logs
 
-// --- EXTERNAL DECLARATIONS (Force Link) ---
-extern NTSTATUS WdfDriverCreate(void*, void*, void*, void*, void*, void*);
-extern void* WdfDriverGetRegistryPath(void*);
-extern NTSTATUS WdfDeviceCreate(void*, void*, void*, void*);
-extern NTSTATUS WdfDeviceCreateDeviceInterface(void*, void*, void*, void*);
-extern NTSTATUS WdfDeviceRetrieveDeviceInterfaceString(void*, void*, void*, void*, void*);
-extern void WdfObjectGetTypedContextWorker(void*, void*);
-extern NTSTATUS WdfObjectCreate(void*, void*, void*);
-extern void WdfObjectReferenceActual(void*, void*, void*, void*, void*);
-extern void WdfObjectDereferenceActual(void*, void*, void*, void*, void*);
-
 static struct __winapi_descr *descr_head;
 
 void __register_windows_api(struct __winapi_descr *descr) {
@@ -27,17 +16,9 @@ void *resolve_windows_api(const char *name) {
         if(strcmp(d->name, name) == 0) return d->func;
     }
 
-    // 2. CRITICAL FALLBACK: Manual Resolution
-    // This catches functions when constructors fail to run.
-    if (strcmp(name, "WdfDriverCreate") == 0) return (void*) WdfDriverCreate;
-    if (strcmp(name, "WdfDriverGetRegistryPath") == 0) return (void*) WdfDriverGetRegistryPath;
-    if (strcmp(name, "WdfDeviceCreate") == 0) return (void*) WdfDeviceCreate;
-    if (strcmp(name, "WdfDeviceCreateDeviceInterface") == 0) return (void*) WdfDeviceCreateDeviceInterface;
-    if (strcmp(name, "WdfDeviceRetrieveDeviceInterfaceString") == 0) return (void*) WdfDeviceRetrieveDeviceInterfaceString;
-    if (strcmp(name, "WdfObjectGetTypedContextWorker") == 0) return (void*) WdfObjectGetTypedContextWorker;
-    if (strcmp(name, "WdfObjectCreate") == 0) return (void*) WdfObjectCreate;
-    if (strcmp(name, "WdfObjectReferenceActual") == 0) return (void*) WdfObjectReferenceActual;
-    if (strcmp(name, "WdfObjectDereferenceActual") == 0) return (void*) WdfObjectDereferenceActual;
+    //The WDF fallback table that used to live here is gone along with the WDF
+    //layer - the UMDF driver was the only thing that imported those, and it is
+    //no longer relinked.
 
     // Log failure to help debug missing imports
     fprintf(stderr, "[WARN] resolve_windows_api failed for '%s'\n", name);
