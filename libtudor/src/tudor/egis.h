@@ -10,6 +10,9 @@
 
 //The EgisTec EH575 speaks a simple framed protocol over two bulk endpoints.
 //Host packets start with the ASCII magic "EGIS", device replies with "SIGE".
+#define EGIS_USB_VID 0x1c7a
+#define EGIS_USB_PID 0x0575
+
 #define EGIS_EP_OUT 0x01
 #define EGIS_EP_IN  0x82
 

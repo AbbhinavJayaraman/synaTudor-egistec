@@ -15,6 +15,7 @@
 //USB captures of the Windows stack.
 
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 #include "internal.h"
 #include "egis.h"
@@ -306,6 +307,37 @@ static NTSTATUS egis_ioctl_calibrate(struct egis_device *dev, void *out_buf, siz
     return STATUS_SUCCESS;
 }
 
+//The Windows driver answers this by querying DEVPKEY_Device_InstanceId off its
+//WDF device, so what comes back is a PnP instance path of the usual shape
+//  USB\VID_1C7A&PID_0575\<serial-or-location>
+//as a NUL-terminated UTF-16 string. We have no PnP stack, so build the same
+//shape from the bus and address libusb reports, which is stable for a given
+//physical port and unique per device.
+static NTSTATUS egis_ioctl_get_instance_id(struct egis_device *dev, void *out_buf, size_t out_size, size_t *transferred) {
+    char id[128];
+    libusb_device *usb = libusb_get_device(dev->usb_dev);
+    snprintf(id, sizeof(id), "USB\\VID_%04X&PID_%04X\\%d&%d",
+        EGIS_USB_VID, EGIS_USB_PID,
+        usb ? libusb_get_bus_number(usb) : 0,
+        usb ? libusb_get_device_address(usb) : 0);
+
+    size_t len = strlen(id);
+    size_t needed = (len + 1) * sizeof(char16_t);
+    if(out_size < needed) return STATUS_BUFFER_TOO_SMALL;
+
+    //ASCII only, so widening byte by byte is exact.
+    char16_t *out = (char16_t*) out_buf;
+    for(size_t i = 0; i < len; i++) out[i] = (char16_t) (unsigned char) id[i];
+    out[len] = 0;
+
+    log_debug("EGIS instance ID: %s", id);
+
+    //The Windows handler reports character count * 2, i.e. the byte length
+    //including the terminator.
+    *transferred = needed;
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS egis_ioctl_get_indicator(struct egis_device *dev, void *out_buf, size_t out_size, size_t *transferred) {
     if(out_size < 0xc) return STATUS_BUFFER_TOO_SMALL;
     memset(out_buf, 0, 0xc);
@@ -480,6 +512,9 @@ NTSTATUS egis_devctrl(struct egis_device *dev, OVERLAPPED *ovlp, ULONG code, con
             break;
         case IOCTL_BIOMETRIC_CALIBRATE:
             status = egis_ioctl_calibrate(dev, out_buf, out_size, &transferred);
+            break;
+        case IOCTL_EGIS_GET_INSTANCE_ID:
+            status = egis_ioctl_get_instance_id(dev, out_buf, out_size, &transferred);
             break;
         case IOCTL_BIOMETRIC_GET_INDICATOR:
             status = egis_ioctl_get_indicator(dev, out_buf, out_size, &transferred);

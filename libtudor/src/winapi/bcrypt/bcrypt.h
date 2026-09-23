@@ -62,7 +62,26 @@ struct bcrypt_algorithm {
     bcrypt_sign_hash_fnc *sign_hash;
     bcrypt_verify_hash_fnc *verify_hash;
     bcrypt_exchange_secret_fnc *exchange_secret;
+
+    //Hash providers carry no key/cipher operations; see hash.c.
+    bool is_hash;
 };
+
+//A hash provider. bcrypt_algos[] holds these cast to struct bcrypt_algorithm*,
+//the same way the ECC providers are stored.
+struct bcrypt_hash_algorithm {
+    struct bcrypt_algorithm algo;
+    const char *evp_name;
+    size_t digest_size;
+};
+
+struct bcrypt_hash;
+
+bool bcrypt_algo_is_hash(const struct bcrypt_algorithm *algo);
+NTSTATUS bcrypt_hash_create(const struct bcrypt_hash_algorithm *algo, const void *secret, size_t secret_size, struct bcrypt_hash **out);
+NTSTATUS bcrypt_hash_update(struct bcrypt_hash *hash, const void *data, size_t size);
+NTSTATUS bcrypt_hash_finish(struct bcrypt_hash *hash, void *out, size_t out_size);
+void bcrypt_hash_destroy(struct bcrypt_hash *hash);
 
 struct bcrypt_algo_wrap {
     struct bcrypt_object obj;
@@ -84,5 +103,6 @@ struct bcrypt_secret {
 
 extern struct bcrypt_algorithm bcrypt_algo_aes;
 extern struct bcrypt_ecc_algorithm bcrypt_algo_ecdh_p256, bcrypt_algo_ecdsa_p256;
+extern struct bcrypt_hash_algorithm bcrypt_algo_sha1, bcrypt_algo_sha256, bcrypt_algo_sha384, bcrypt_algo_sha512, bcrypt_algo_md5;
 
 #endif

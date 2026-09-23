@@ -1,4 +1,5 @@
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include "bcrypt.h"
 
 typedef struct {
@@ -28,11 +29,14 @@ typedef struct {
     BCryptBuffer *pBuffers;
 } BCryptBufferDesc;
 
-#define NUM_BCRYPT_ALGORITHMS 3
 struct bcrypt_algorithm *bcrypt_algos[] = {
     &bcrypt_algo_aes,
-    (struct bcrypt_algorithm*) &bcrypt_algo_ecdh_p256, (struct bcrypt_algorithm*) &bcrypt_algo_ecdsa_p256
+    (struct bcrypt_algorithm*) &bcrypt_algo_ecdh_p256, (struct bcrypt_algorithm*) &bcrypt_algo_ecdsa_p256,
+    (struct bcrypt_algorithm*) &bcrypt_algo_sha1, (struct bcrypt_algorithm*) &bcrypt_algo_sha256,
+    (struct bcrypt_algorithm*) &bcrypt_algo_sha384, (struct bcrypt_algorithm*) &bcrypt_algo_sha512,
+    (struct bcrypt_algorithm*) &bcrypt_algo_md5
 };
+#define NUM_BCRYPT_ALGORITHMS (sizeof(bcrypt_algos) / sizeof(bcrypt_algos[0]))
 
 static void add_obj_prop(struct bcrypt_object *obj, const char *name, const void *val, size_t val_size) {
     //Allocate property
@@ -141,7 +145,7 @@ __winfnc NTSTATUS BCryptOpenAlgorithmProvider(struct bcrypt_algo_wrap **out, con
 
     //Try to find the algorithm
     struct bcrypt_algorithm *algo = NULL;
-    for(int i = 0; i < NUM_BCRYPT_ALGORITHMS; i++) {
+    for(size_t i = 0; i < NUM_BCRYPT_ALGORITHMS; i++) {
         if(strcmp(alg_cid, bcrypt_algos[i]->name) == 0) {
             algo = bcrypt_algos[i];
             break;
@@ -168,6 +172,17 @@ __winfnc NTSTATUS BCryptOpenAlgorithmProvider(struct bcrypt_algo_wrap **out, con
 
     BCRYPT_KEY_LENGTHS_STRUCT tls = { .dwMinLength = (ULONG) algo->min_tag_size, .dwMaxLength = (ULONG) algo->max_tag_size, .dwIncrement = (ULONG) algo->tag_size_step };
     add_obj_prop(&wrap->obj, "AuthTagLength", &tls, sizeof(tls));
+
+    if(bcrypt_algo_is_hash(algo)) {
+        //Callers query HashDigestLength to size their output buffer, and
+        //ObjectLength to size the scratch buffer they hand BCryptCreateHash.
+        //We allocate our own hash state, so ObjectLength is nominal.
+        ULONG digest_len = (ULONG) ((struct bcrypt_hash_algorithm*) algo)->digest_size;
+        add_obj_prop(&wrap->obj, "HashDigestLength", &digest_len, sizeof(digest_len));
+
+        ULONG obj_len = (ULONG) sizeof(void*);
+        add_obj_prop(&wrap->obj, "ObjectLength", &obj_len, sizeof(obj_len));
+    }
 
     *out = wrap;
     return STATUS_SUCCESS;
@@ -598,33 +613,49 @@ WINAPI(BCryptDeriveKey)
 
 /* --- ADD THIS TO THE END OF bcrypt.c --- */
 
+//These four used to be stubs: BCryptFinishHash memset the output to zero and
+//BCryptHashData discarded its input, so every digest the driver computed came
+//out as a constant run of zero bytes.
 __winfnc NTSTATUS BCryptCreateHash(struct bcrypt_algo_wrap *algo, void **hash, UCHAR *hash_obj, ULONG hash_obj_size, UCHAR *secret, ULONG secret_size, ULONG flags) {
-    // Dummy stub: return success but don't actually create a complex hash object
-    if(hash) *hash = (void*)0xDEADBEEF; 
+    if(!algo || !hash) return WINERR_SET_CODE;
+    if(!bcrypt_algo_is_hash(algo->algo)) {
+        log_warn("BCryptCreateHash | algorithm '%s' is not a hash provider!", algo->algo->name);
+        return WINERR_SET_CODE;
+    }
+
+    struct bcrypt_hash *h;
+    NTSTATUS status = bcrypt_hash_create((struct bcrypt_hash_algorithm*) algo->algo, secret, secret_size, &h);
+    if(status != STATUS_SUCCESS) return status;
+
+    *hash = h;
     return STATUS_SUCCESS;
 }
 WINAPI(BCryptCreateHash)
 
 __winfnc NTSTATUS BCryptHashData(void *hash, UCHAR *input, ULONG input_size, ULONG flags) {
-    return STATUS_SUCCESS;
+    return bcrypt_hash_update((struct bcrypt_hash*) hash, input, input_size);
 }
 WINAPI(BCryptHashData)
 
 __winfnc NTSTATUS BCryptFinishHash(void *hash, UCHAR *output, ULONG output_size, ULONG flags) {
-    // Zero out the hash buffer to be safe
-    if(output) memset(output, 0, output_size);
-    return STATUS_SUCCESS;
+    return bcrypt_hash_finish((struct bcrypt_hash*) hash, output, output_size);
 }
 WINAPI(BCryptFinishHash)
 
 __winfnc NTSTATUS BCryptDestroyHash(void *hash) {
+    bcrypt_hash_destroy((struct bcrypt_hash*) hash);
     return STATUS_SUCCESS;
 }
 WINAPI(BCryptDestroyHash)
 
+//This used to fill the buffer with a constant 0xAA. Anything the driver keyed,
+//salted or nonced from it was fully predictable.
 __winfnc NTSTATUS BCryptGenRandom(void *algo, UCHAR *buffer, ULONG buffer_size, ULONG flags) {
-    // Fill with random-ish data (or zeros)
-    if(buffer) memset(buffer, 0xAA, buffer_size);
+    if(!buffer) return WINERR_SET_CODE;
+    if(RAND_bytes(buffer, (int) buffer_size) != 1) {
+        log_error("BCryptGenRandom | RAND_bytes failed!");
+        return WINERR_SET_CODE;
+    }
     return STATUS_SUCCESS;
 }
 WINAPI(BCryptGenRandom)

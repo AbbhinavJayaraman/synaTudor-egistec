@@ -43,6 +43,7 @@ libtudor_src = [
     'src/winapi/bcrypt/bcrypt.c',
     'src/winapi/bcrypt/ecc.c',
     'src/winapi/bcrypt/aes.c',
+    'src/winapi/bcrypt/hash.c',
 
 
     'src/tudor/async.c',

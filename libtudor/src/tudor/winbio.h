@@ -326,6 +326,14 @@ typedef struct {
 #define IOCTL_BIOMETRIC_SET_INDICATOR     0x440020
 #define IOCTL_BIOMETRIC_UPDATE_FIRMWARE   0x440024
 
+//Egis-private: CTL_CODE(FILE_DEVICE_UNKNOWN, 0, METHOD_BUFFERED, FILE_ANY_ACCESS).
+//The Windows driver answers it by querying DEVPKEY_Device_InstanceId
+//({78C34FC8-104A-4ACA-9EA4-524D52996E57}, 256) off its WDF device and
+//returning the value as a UTF-16 string - its handler completes the request
+//with a byte count of (character count * 2). The engine adapter calls it during
+//Attach, right after reading the model name out of GET_ATTRIBUTES.
+#define IOCTL_EGIS_GET_INSTANCE_ID        0x220000
+
 #define WINBIO_MAX_STRING_LEN 256
 
 //ANSI INCITS 381 finger image format - what the Windows sensor adapter
