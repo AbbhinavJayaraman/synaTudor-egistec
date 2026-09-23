@@ -81,9 +81,51 @@ Target platform is Arch/CachyOS. Deps: `base-devel meson ninja pkgconf libusb
 openssl libcap libseccomp glib2 glib2-devel dbus json-glib libgusb
 systemd-libs`, plus `libfprint-tod-git` from the AUR (it replaces `libfprint`).
 
-## Current state (as of 87015fb)
+### Passwordless sudo for iteration
 
-Not yet working end to end. Last hardware run got:
+A scoped `NOPASSWD` drop-in at `/etc/sudoers.d/synatudor-dev` covers
+`ninja -C <repo>/build install` and `/sbin/tudor/tudor_cli *`, so both can run
+without a password prompt during a session. Two gotchas hit already:
+
+- sudoers matches the **literal argument string**, not a resolved path - the
+  `ninja -C` rule only fires when invoked with the full absolute build path
+  (`-C /home/.../build`), not a relative `-C build` even from the right cwd.
+- sudo zeroes `RLIMIT_CORE` for the child process, so a crash under `sudo
+  tudor_cli` produces **no coredump** even with `ulimit -c unlimited` in the
+  parent shell (`systemd-coredump` logs "Resource limits disable core
+  dumping"). Getting a real backtrace needs `sudo gdb --args
+  /sbin/tudor/tudor_cli ...`, which is not yet in the NOPASSWD rule (ask the
+  user before adding it, or ask them to run the gdb invocation directly).
+
+## Current state (as of b192358)
+
+**Blocked before the previously-recorded failure can even be re-tested.** A
+fresh hardware run (build from `b192358`, clean build, no code changes)
+segfaults:
+
+- `sudo ninja -C build install` then `sudo /sbin/tudor/tudor_cli
+  ~/tudor-store.bin -vvt` crashes with SIGSEGV. The trace never reaches a
+  `[DEVCTRL]` line or a `>>> CTouchSensor::` line, so this is happening
+  earlier than DLL `Attach` - somewhere during/after `DllMain` and Win32 API
+  shim resolution (the last output is repeated `[SPY] GetProcAddress`
+  lines for the second DLL's imports).
+- Kernel log: `segfault at 2 ip 00007eff5e3b4b9d ... in libc.so.6[1b4b9d,...]`
+  - address `0x2` is a near-null pointer, small enough to suggest a
+    `wcs*`-family (wide-char, 2-byte unit) function called on a bad/null
+    pointer, but this is a guess, not confirmed.
+  - **No backtrace obtained yet** - see the sudo/`RLIMIT_CORE` gotcha above.
+    Next step is `sudo gdb --args /sbin/tudor/tudor_cli ~/tudor-store.bin -vvt`
+    (needs a sudoers rule for `gdb`, not yet added) to find exactly where and
+    why.
+
+This is a regression (or a previously-latent bug) relative to the `87015fb`
+narrative below, which was the last time the flow got as far as `Attach` -
+**that state has not been reproduced since.** Whether this crash is new
+(introduced somewhere in `19c9156`..`b192358`) or was always there and simply
+wasn't hit on the specific run that produced the `87015fb` notes is unknown -
+`git bisect` against hardware runs would settle it.
+
+### Last known-good-ish state (87015fb narrative, unverified since)
 
 - both DLLs relinked, relocated and through `DllMain`
 - the sensor initialised over USB (`egis_init_sensor` completes)
@@ -93,14 +135,18 @@ Not yet working end to end. Last hardware run got:
 - then `engine_adapter->Attach` failing with `0x8000ffff` (`E_UNEXPECTED`)
 
 Two causes visible in that run were fixed in `87015fb` (BCrypt hash providers,
-IOCTL `0x220000`) but **have not been re-tested against hardware.** Re-running
-the CLI is the first thing to do.
+IOCTL `0x220000`) but still have not been re-tested against hardware, because
+the new segfault above now happens first.
 
 ## Open threads
 
-1. **Re-test `engine->Attach`.** If it still fails, the engine's `<<<
-   EngineAdapterAttach : ErrorCode [0x%08X]` trace and the surrounding
-   `CTouchSensor::` lines say where.
+0. **Get a backtrace for the new early segfault** (see "Current state"). This
+   blocks everything below it - `Attach` can't be re-tested until the CLI
+   survives to issue any `DEVCTRL` calls at all.
+
+1. **Re-test `engine->Attach`** (blocked on #0). If it still fails, the
+   engine's `<<< EngineAdapterAttach : ErrorCode [0x%08X]` trace and the
+   surrounding `CTouchSensor::` lines say where.
 
 2. **`HKLM\SYSTEM\CurrentControlSet\Services\EgisFP\FPParameters`.** The engine
    reads `Optimization` and `SmartLearn` from it. This key is *not* in the INF,
