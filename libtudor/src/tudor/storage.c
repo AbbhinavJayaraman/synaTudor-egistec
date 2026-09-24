@@ -63,10 +63,42 @@ bool tudor_add_record(struct tudor_device *device, RECGUID guid, enum tudor_fing
     return true;
 }
 
-__winfnc static HRESULT storage_NOTIMPL() {
-    log_error("Not implemented storage adapter function called!");
-    abort();
+//One shared stub that abort()s tells you a storage entry point was hit but not
+//which one, and takes the process down before the trace can show what the
+//engine would have done next. Name each stub after its slot and return a real
+//error instead, so the log identifies the gap and the run continues.
+#define STORAGE_NOTIMPL(name, err) \
+    __winfnc static HRESULT storage_##name() { \
+        log_error("Unimplemented storage adapter function '" #name "' called!"); \
+        return (err); \
+    }
+
+STORAGE_NOTIMPL(CreateDatabase, WINBIO_E_DATABASE_CANT_CREATE)
+STORAGE_NOTIMPL(EraseDatabase, WINBIO_E_DATABASE_CANT_ERASE)
+STORAGE_NOTIMPL(OpenDatabase, WINBIO_E_DATABASE_CANT_OPEN)
+STORAGE_NOTIMPL(CloseDatabase, WINBIO_E_DATABASE_CANT_CLOSE)
+//The engine calls this from CreateEnrollment to learn what format the records
+//in the open database are in. EgisTouchFP0575.inf declares that format for its
+//own database {01BE2559-0575-4CDA-ABD5-C9992404DA3A} as the null GUID:
+//
+//    HKLM,System\CurrentControlSet\Services\WbioSrvc\Databases\{01BE...},
+//        Format,,"00000000-0000-0000-0000-000000000000"
+//
+//which is WinBIO's way of saying the templates are engine-private blobs with no
+//standard interchange format - exactly how we treat them, since we only ever
+//hand them back to the same engine that produced them. Reporting the ANSI 381
+//format the sensor advertises for its *samples* would be a different claim, and
+//a false one.
+__winfnc static HRESULT storage_GetDataFormat(WINBIO_PIPELINE *pipeline, GUID *format, WINBIO_VERSION *version) {
+    if(!format || !version) return E_INVALIDARG;
+
+    memset(format, 0, sizeof(*format));
+    version->MajorVersion = 1;
+    version->MinorVersion = 0;
+
+    return ERROR_SUCCESS;
 }
+STORAGE_NOTIMPL(GetDatabaseSize, WINBIO_E_INVALID_DEVICE_STATE)
 
 __winfnc static HRESULT storage_NOP() {
     return ERROR_SUCCESS;
@@ -296,12 +328,12 @@ WINBIO_STORAGE_INTERFACE *tudor_storage_adapter = &(WINBIO_STORAGE_INTERFACE) {
     .Attach = storage_NOP,
     .Detach = storage_NOP,
     .ClearContext = storage_NOP,
-    .CreateDatabase = storage_NOTIMPL,
-    .EraseDatabase = storage_NOTIMPL,
-    .OpenDatabase = storage_NOTIMPL,
-    .CloseDatabase = storage_NOTIMPL,
-    .GetDataFormat = storage_NOTIMPL,
-    .GetDatabaseSize = storage_NOTIMPL,
+    .CreateDatabase = storage_CreateDatabase,
+    .EraseDatabase = storage_EraseDatabase,
+    .OpenDatabase = storage_OpenDatabase,
+    .CloseDatabase = storage_CloseDatabase,
+    .GetDataFormat = storage_GetDataFormat,
+    .GetDatabaseSize = storage_GetDatabaseSize,
     .AddRecord = storage_AddRecord,
     .DeleteRecord = storage_DeleteRecord,
     .QueryBySubject = storage_QueryBySubject,

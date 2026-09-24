@@ -15,6 +15,7 @@
 //USB captures of the Windows stack.
 
 #include <string.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <unistd.h>
 #include "internal.h"
@@ -27,6 +28,13 @@
 //Poll interval used while waiting for a finger, so that a cancelled capture
 //notices reasonably quickly.
 #define EGIS_POLL_INTERVAL_US 50000
+
+//The capture loop used to poll in complete silence, so a run that sat waiting
+//gave no way to tell frames from a stalled pipe - and the finger-detect
+//threshold below is a heuristic ported from the Python driver that has never
+//been checked against this sensor. Log the frame variance every this many
+//polls (~1s) at verbose level so both are visible.
+#define EGIS_POLL_LOG_EVERY 20
 
 //A frame whose standard deviation is below this is taken to be an empty
 //platen. Tuned in the Python driver against this sensor. Compared as a
@@ -285,20 +293,38 @@ static NTSTATUS egis_ioctl_get_attributes(struct egis_device *dev, void *out_buf
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS egis_ioctl_get_sensor_status(struct egis_device *dev, void *out_buf, size_t out_size, size_t *transferred) {
-    //The adapter asks for 0x14 bytes here. Only the leading status word is
-    //interpreted by EgisTouchFPSensor0575's QueryStatus path.
-    if(out_size < 0x14) return STATUS_BUFFER_TOO_SMALL;
+//The 0x14-byte reply EgisTouchFPSensor0575's QueryStatus expects. Its handler
+//is FUN_180001700, which issues the IOCTL with a 0x14 output buffer spanning
+//three stack slots - local_30 (fp-0x30, 8 bytes), local_28 (fp-0x28, 8 bytes)
+//and local_20 (fp-0x20, 4 bytes) - and then does:
+//
+//    if(0x13 < bytes_returned) *param_2 = (undefined4) local_28;
+//
+//so the WINBIO_SENSOR_* status it publishes is the DWORD at *offset 8* of the
+//reply, not the leading word. It also rejects any reply shorter than the full
+//0x14, falling through to a 0x80098036 HRESULT.
+struct egis_sensor_status_reply {
+    ULONG reserved[2];  //local_30 - never read on this path
+    ULONG status;       //local_28 - the WINBIO_SENSOR_* value
+    ULONG status_hi;    //upper half of local_28, truncated away by the cast
+    ULONG trailer;      //local_20
+};
+_Static_assert(offsetof(struct egis_sensor_status_reply, status) == 8, "status must land in local_28");
+_Static_assert(sizeof(struct egis_sensor_status_reply) == 0x14, "reply must be the 0x14 bytes the adapter asks for");
 
-    memset(out_buf, 0, 0x14);
+static NTSTATUS egis_ioctl_get_sensor_status(struct egis_device *dev, void *out_buf, size_t out_size, size_t *transferred) {
+    if(out_size < sizeof(struct egis_sensor_status_reply)) return STATUS_BUFFER_TOO_SMALL;
+
+    struct egis_sensor_status_reply *reply = out_buf;
+    memset(reply, 0, sizeof(*reply));
 
     cant_fail_ret(pthread_mutex_lock(&dev->cap_lock));
     bool busy = dev->cap_running;
     cant_fail_ret(pthread_mutex_unlock(&dev->cap_lock));
 
-    ((ULONG*) out_buf)[0] = busy ? WINBIO_SENSOR_BUSY : WINBIO_SENSOR_READY;
+    reply->status = busy ? WINBIO_SENSOR_BUSY : WINBIO_SENSOR_READY;
 
-    *transferred = 0x14;
+    *transferred = sizeof(*reply);
     return STATUS_SUCCESS;
 }
 
@@ -382,6 +408,10 @@ static NTSTATUS egis_ioctl_set_indicator(struct egis_device *dev, const void *in
 
 //--- Asynchronous capture ----------------------------------------------------
 
+//What a completed capture writes back: the fixed WINBIO_CAPTURE_DATA header
+//followed by one whole 103 x 52 frame.
+#define EGIS_CAPTURE_REPLY_SIZE (offsetof(WINBIO_CAPTURE_DATA, CaptureBuffer) + EGIS_IMG_BYTES)
+
 //Waits for the platen to clear, then for a finger, then returns that frame.
 //Runs on its own thread so the adapter's overlapped DeviceIoControl behaves
 //the way it does on Windows and stays cancellable.
@@ -396,6 +426,7 @@ static void *egis_capture_thread(void *arg) {
     //Wait for the previous finger to come off, so a single press cannot be
     //consumed as two captures.
     int clear_streak = 0;
+    unsigned polls = 0;
     while(clear_streak < 2) {
         cant_fail_ret(pthread_mutex_lock(&dev->cap_lock));
         bool cancelled = dev->cap_cancel;
@@ -403,7 +434,13 @@ static void *egis_capture_thread(void *arg) {
         if(cancelled) { status = STATUS_CANCELLED; goto done; }
 
         if(!egis_capture_frame(dev, img)) goto done;
-        if(egis_frame_variance(img, sizeof(img)) < EGIS_TOUCH_VARIANCE) clear_streak++;
+
+        double var = egis_frame_variance(img, sizeof(img));
+        if(polls++ % EGIS_POLL_LOG_EVERY == 0) {
+            log_verbose("EGIS capture: waiting for platen to clear [variance %.1f, threshold %.1f, streak %d]", var, (double) EGIS_TOUCH_VARIANCE, clear_streak);
+        }
+
+        if(var < EGIS_TOUCH_VARIANCE) clear_streak++;
         else clear_streak = 0;
 
         usleep(EGIS_POLL_INTERVAL_US);
@@ -417,7 +454,15 @@ static void *egis_capture_thread(void *arg) {
         if(cancelled) { status = STATUS_CANCELLED; goto done; }
 
         if(!egis_capture_frame(dev, img)) goto done;
-        if(egis_frame_variance(img, sizeof(img)) >= EGIS_TOUCH_VARIANCE) break;
+
+        double var = egis_frame_variance(img, sizeof(img));
+        if(var >= EGIS_TOUCH_VARIANCE) {
+            log_debug("EGIS capture: finger detected [variance %.1f, threshold %.1f]", var, (double) EGIS_TOUCH_VARIANCE);
+            break;
+        }
+        if(polls++ % EGIS_POLL_LOG_EVERY == 0) {
+            log_verbose("EGIS capture: waiting for finger [variance %.1f, threshold %.1f]", var, (double) EGIS_TOUCH_VARIANCE);
+        }
 
         usleep(EGIS_POLL_INTERVAL_US);
     }
@@ -427,7 +472,7 @@ static void *egis_capture_thread(void *arg) {
     //an ANSI 381 BIR before it reaches the engine.
     {
         WINBIO_CAPTURE_DATA *data = (WINBIO_CAPTURE_DATA*) req->out_buf;
-        size_t needed = offsetof(WINBIO_CAPTURE_DATA, CaptureBuffer) + EGIS_IMG_BYTES;
+        size_t needed = EGIS_CAPTURE_REPLY_SIZE;
         if(req->out_size < needed) { status = STATUS_BUFFER_TOO_SMALL; goto done; }
 
         memset(data, 0, offsetof(WINBIO_CAPTURE_DATA, CaptureBuffer));
@@ -463,7 +508,28 @@ done:
 
 static NTSTATUS egis_ioctl_capture_data(struct egis_device *dev, OVERLAPPED *ovlp, const void *in_buf, size_t in_size, void *out_buf, size_t out_size, struct egis_request **out_req) {
     if(in_size < 0x20) return STATUS_INVALID_PARAMETER;
-    if(out_size < offsetof(WINBIO_CAPTURE_DATA, CaptureBuffer) + EGIS_IMG_BYTES) return STATUS_BUFFER_TOO_SMALL;
+
+    //SensorAdapterStartCapture negotiates this buffer over two calls - the two
+    //DeviceIoControl(0x440014) sites in EgisTouchFPSensor0575 that bracket
+    //LAB_1800022df. The first arrives with a 0x18-byte heap block, and the
+    //adapter then treats the DWORD the driver left at offset 0 as the size it
+    //actually needs:
+    //
+    //    lpMem = buf;
+    //    if(buf_size < *lpMem) { buf_size = *lpMem; HeapFree(lpMem); realloc; }
+    //
+    //and reissues the same IOCTL with a buffer that size. So a short buffer
+    //here is a size probe, not an error. Answer it inline with the required
+    //size - offset 0 is WINBIO_CAPTURE_DATA::PayloadSize, so this is also just
+    //a truncated reply - and let the second call run the real capture.
+    //Returning STATUS_BUFFER_TOO_SMALL left the adapter stuck with its
+    //0x18-byte buffer and failed StartCapture with 0x80098036.
+    if(out_size < EGIS_CAPTURE_REPLY_SIZE) {
+        if(out_size < sizeof(ULONG)) return STATUS_BUFFER_TOO_SMALL;
+        ((ULONG*) out_buf)[0] = (ULONG) EGIS_CAPTURE_REPLY_SIZE;
+        winio_complete_overlapped(ovlp, STATUS_SUCCESS, sizeof(ULONG));
+        return STATUS_SUCCESS;
+    }
 
     const WINBIO_CAPTURE_PARAMETERS *params = (const WINBIO_CAPTURE_PARAMETERS*) in_buf;
     log_debug("EGIS capture requested [purpose 0x%x, subtype 0x%x, format %04x:%04x]", params->Purpose, params->Subtype, params->Format.Owner, params->Format.Type);

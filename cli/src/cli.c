@@ -5,13 +5,33 @@
 #include <tudor/log.h>
 #include "cli.h"
 
-static bool abort_cmd_loop = false;
+//Written from sigint_handler, so it has to be readable there and not cached
+//across the polling loops below.
+static volatile sig_atomic_t abort_cmd_loop = 0;
 static void sigint_handler(int sig) {
     if(abort_cmd_loop) {
         log_warn("Forcefully exitting!");
         exit(EXIT_FAILURE);
     }
-    abort_cmd_loop = false;
+    abort_cmd_loop = 1;
+}
+
+//getchar() yields EOF as -1. Stored in a char that narrows to 0xFF, which is
+//neither '\n' nor a space, so every drain below spun forever once stdin closed
+//- a piped run burned a 77M-line log doing it. Read into an int and treat EOF
+//as a shutdown request, which is what a closed stdin means here.
+static int cli_getchar(void) {
+    int chr = getchar();
+    if(chr == EOF) abort_cmd_loop = 1;
+    return chr;
+}
+
+//Discard the rest of the current input line, stopping on EOF or ^C too.
+static void cli_drain_line(void) {
+    int chr;
+    do {
+        chr = cli_getchar();
+    } while(!abort_cmd_loop && chr != '\n');
 }
 
 void cli_main_loop(struct tudor_device *device) {
@@ -30,8 +50,8 @@ void cli_main_loop(struct tudor_device *device) {
         puts("  s - shutdown driver");
 
         printf("> ");
-        char cmd = getchar();
-        while(!abort_cmd_loop && isspace(cmd)) cmd = getchar();
+        int cmd = cli_getchar();
+        while(!abort_cmd_loop && isspace(cmd)) cmd = cli_getchar();
         if(abort_cmd_loop) break;
 
         //Execute command
@@ -41,14 +61,14 @@ void cli_main_loop(struct tudor_device *device) {
                 RECGUID guid = {0};
                 printf("Enter identity index: ");
                 scanf("%u", &guid.PartA);
-                while(!abort_cmd_loop && getchar() != '\n') continue;
+                cli_drain_line();
                 if(abort_cmd_loop) goto cmdend;
 
                 //Read finger
                 enum tudor_finger finger;
                 printf("Enter finger index (1-5 = right hand thumb - little finger | 6-10 = left hand thumb - little finger): ");
                 scanf("%d", (int*) &finger);
-                while(!abort_cmd_loop && getchar() != '\n') continue;
+                cli_drain_line();
                 if(abort_cmd_loop) goto cmdend;
                 if(finger < TUDOR_FINGER_RH_THUMB || TUDOR_FINGER_LH_LITTLE_FINGER < finger) {
                     printf("Invalid finger index!");
@@ -105,7 +125,7 @@ void cli_main_loop(struct tudor_device *device) {
                 RECGUID guid = {0};
                 printf("Enter identity index: ");
                 scanf("%u", &guid.PartA);
-                while(!abort_cmd_loop && getchar() != '\n') continue;
+                cli_drain_line();
                 if(abort_cmd_loop) goto cmdend;
 
                 bool matches;
@@ -167,7 +187,7 @@ void cli_main_loop(struct tudor_device *device) {
                 RECGUID guid = {0};
                 printf("Enter identity index (invalid number for all): ");
                 if(scanf("%u", &guid.PartA) < 1) all_guids = true;
-                while(!abort_cmd_loop && getchar() != '\n') continue;
+                cli_drain_line();
                 if(abort_cmd_loop) goto cmdend;
 
                 //Print records
@@ -189,21 +209,21 @@ void cli_main_loop(struct tudor_device *device) {
                 RECGUID guid = {0};
                 printf("Enter identity index (invalid number for all): ");
                 if(scanf("%u", &guid.PartA) < 1) all_guids = true;
-                while(!abort_cmd_loop && getchar() != '\n') continue;
+                cli_drain_line();
                 if(abort_cmd_loop) goto cmdend;
 
                 //Read finger
                 enum tudor_finger finger;
                 printf("Enter finger index (invalid number for all): ");
                 if(scanf("%d", (int*) &finger) < 1) finger = TUDOR_FINGER_ANY;
-                while(!abort_cmd_loop && getchar() != '\n') continue;
+                cli_drain_line();
                 if(abort_cmd_loop) goto cmdend;
 
                 //Ask for confirmation
                 printf("Do you really want to wipe all enrolled fingers with identity index=%u finger=%d?\n", guid.PartA, finger);
                 printf("y/n: ");
-                char yn = getchar();
-                while(!abort_cmd_loop && getchar() != '\n') continue;
+                int yn = cli_getchar();
+                cli_drain_line();
                 if(yn != 'y') {
                     puts("Aborted wipe");
                     goto cmdend;
@@ -213,7 +233,7 @@ void cli_main_loop(struct tudor_device *device) {
                 int num_wiped = tudor_wipe_records(device, all_guids ? NULL: &guid, finger);
                 printf("Succesfully wiped %d enrolled finger(s)\n", num_wiped);
             } goto cmdend;
-            case 's': abort_cmd_loop = true; goto cmdend;
+            case 's': abort_cmd_loop = 1; goto cmdend;
             default: printf("Unknown command '%c'!\n", cmd);
         }
         cmdend:;

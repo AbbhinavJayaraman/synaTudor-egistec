@@ -366,19 +366,44 @@ _Static_assert(offsetof(WINBIO_SENSOR_ATTRIBUTES, SupportedFormatEntries) == 0x6
 _Static_assert(offsetof(WINBIO_SENSOR_ATTRIBUTES, SupportedFormat) == 0x628, "WINBIO_SENSOR_ATTRIBUTES::SupportedFormat must sit at +0x628");
 _Static_assert(sizeof(WINBIO_SENSOR_ATTRIBUTES) == 0x62c, "WINBIO_SENSOR_ATTRIBUTES must be 0x62c bytes with one format entry");
 
+//The 0x20-byte request SensorAdapterStartCapture sends with IOCTL 0x440014.
+//Note this is *not* the documented WINBIO_CAPTURE_PARAMETERS: there is no
+//Factor/WinBioType field in front of Purpose. The layout below is read
+//straight off the code that builds the buffer in EgisTouchFPSensor0575
+//(LAB_1800022df, just before the first DeviceIoControl(0x440014)):
+//
+//    local_70._0_5_ = CONCAT14(param_2, 0x20);                  // +0x00 size, +0x04 purpose
+//    local_70       = CONCAT26(*(u16*)(ctx+0x4c), ...);          // +0x06
+//    local_68       = CONCAT62(..., *(u16*)(ctx+0x4e));          // +0x08
+//    local_68       = CONCAT44(*(u32*)(ctx+0x50), ...);          // +0x0c
+//    uStack_60      = *(u64*)(ctx+0x54);                         // +0x10   one GUID
+//    uStack_58      = CONCAT44(..., *(u32*)(ctx+0x5c));          // +0x18
+//    uStack_58      = CONCAT35(..., 0x2000000000);               // +0x1c = 0x20
+//
+//so ctx+0x4c/+0x4e are the {Owner, Type} pair and ctx+0x50..0x5f is one
+//contiguous GUID. The observed request confirms it: purpose 0x04 is
+//WINBIO_PURPOSE_ENROLL during an enroll, and +0x06/+0x08 carry 0x001b/0x0401,
+//which are exactly WINBIO_ANSI_381_FORMAT_OWNER and _TYPE.
 typedef struct {
     ULONG PayloadSize;
-    ULONG WinBioType;
     UCHAR Purpose;
     UCHAR Subtype;
     WINBIO_REGISTERED_FORMAT Format;
+    USHORT Reserved;    //never written by the adapter; always observed zero
     GUID VendorFormat;
     ULONG Flags;
 } WINBIO_CAPTURE_PARAMETERS;
 
-//The Windows driver rejects a CAPTURE_DATA request whose input buffer is
-//smaller than 0x20 bytes, so the adapter always sends at least that much.
-_Static_assert(sizeof(WINBIO_CAPTURE_PARAMETERS) >= 0x20, "WINBIO_CAPTURE_PARAMETERS must be at least 0x20 bytes");
+//The driver rejects a CAPTURE_DATA request whose input buffer is smaller than
+//0x20 bytes, and the adapter sends exactly that much - so this has to be 0x20
+//on the nose, not merely "at least". An earlier reading carried a phantom
+//ULONG WinBioType at +0x04, which shifted every field after it by four and
+//made an enroll request decode as purpose 0x01 with format 0000:d2a7.
+_Static_assert(offsetof(WINBIO_CAPTURE_PARAMETERS, Purpose) == 0x04, "Purpose must sit at +0x04");
+_Static_assert(offsetof(WINBIO_CAPTURE_PARAMETERS, Format) == 0x06, "Format must sit at +0x06");
+_Static_assert(offsetof(WINBIO_CAPTURE_PARAMETERS, VendorFormat) == 0x0c, "VendorFormat must sit at +0x0c");
+_Static_assert(offsetof(WINBIO_CAPTURE_PARAMETERS, Flags) == 0x1c, "Flags must sit at +0x1c");
+_Static_assert(sizeof(WINBIO_CAPTURE_PARAMETERS) == 0x20, "WINBIO_CAPTURE_PARAMETERS must be exactly 0x20 bytes");
 
 typedef struct {
     ULONG PayloadSize;
