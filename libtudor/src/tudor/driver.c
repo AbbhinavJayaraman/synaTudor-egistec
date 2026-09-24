@@ -50,6 +50,13 @@ WINBIO_ENGINE_INTERFACE *tudor_engine_adapter;
 
 
 bool tudor_init() {
+    //The log splits across stdout (verbose/debug/info) and stderr (warn/error).
+    //stderr is unbuffered but stdout is block-buffered as soon as it is not a
+    //terminal, so a crash discards up to a bufferful of the trace - including the
+    //lines identifying where it died. Line buffering costs nothing at these rates
+    //and makes the trace trustworthy as a crash record.
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     //Register dummy modules
     winmodule_register(&ntdll_module);
 
@@ -69,8 +76,9 @@ bool tudor_init() {
         winlog_register_trace_msg(DEFINE_GUID(2c18840b, 2ee0, 377e, f168, 1552bbd307c4), 0x0a, "VFM LOG | %s\033[1A");
     }
 
-    //Set registry handler
+    //Set registry handlers
     winreg_set_handler(tudor_reg_handler, NULL);
+    winreg_set_enum_handler(tudor_reg_enum_handler, NULL);
 
     //Load driver DLLs
     tudor_adapter_dll = tudor_engine_dll = NULL;

@@ -4,10 +4,25 @@
 
 static NTSTATUS tudor_devctrl(struct tudor_device *device, OVERLAPPED *ovlp, ULONG code, const void *in_buf, size_t in_size, void *out_buf, size_t out_size, struct egis_request **req) {
     if(LOG_LEVEL <= LOG_VERBOSE) {
+        //Built as one line and written in one go. This used to printf the header
+        //without a newline and then loop over the bytes, so a crash while
+        //servicing the IOCTL left the header sitting in the stdout buffer and the
+        //trace looked like the IOCTL had never been issued at all - which is
+        //exactly how a wsprintfW crash inside sensor Attach got mistaken for a
+        //failure during DLL load.
+        char line[512];
+        int n = snprintf(line, sizeof(line), "[DEVCTRL] -> in code 0x%x (size 0x%lx): ", code, in_size);
+        //A NULL input buffer with a non-zero size is something the driver can do;
+        //it must not be dereferenced on the way to a log line.
+        if(in_buf) {
+            for(size_t i = 0; i < in_size && n < (int) sizeof(line) - 3; i++) {
+                n += snprintf(line + n, sizeof(line) - n, "%02x", ((const uint8_t*) in_buf)[i]);
+            }
+        } else if(in_size) {
+            n += snprintf(line + n, sizeof(line) - n, "<null buffer>");
+        }
         cant_fail_ret(pthread_mutex_lock(&LOG_LOCK));
-        printf("[DEVCTRL] -> in code 0x%x (size 0x%lx): ", code, in_size);
-        for(size_t i = 0; i < in_size; i++) printf("%02x", ((const uint8_t*) in_buf)[i]);
-        puts("");
+        puts(line);
         cant_fail_ret(pthread_mutex_unlock(&LOG_LOCK));
     }
 

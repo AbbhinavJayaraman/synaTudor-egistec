@@ -1,4 +1,5 @@
 #include "internal.h"
+#include <limits.h>
 
 #define MAX_DEFAULTCHAR 2
 #define MAX_LEADBYTES 12
@@ -34,33 +35,90 @@ __winfnc BOOL GetCPInfo(UINT code_page, CPINFO *info) {
 }
 WINAPI(GetCPInfo)
 
+//Both of these used to convert exactly one character and return: they called
+//c16rtomb/mbrtoc16 once on the first unit and ignored the rest of the string.
+//The engine adapter converts its hardware-key path down to ANSI before calling
+//RegOpenKeyExA (FUN_180016f60 in the Ghidra dump), so what reached the registry
+//was the single byte 'S' followed by uninitialised stack - the log showed
+//Key='HKEY_LOCAL_MACHINE\S...'.
+//
+//Windows semantics that matter here: a negative source length means the string
+//is NUL terminated and the terminator is converted and counted too, and a zero
+//destination length is a "how big a buffer do I need" query that writes nothing.
+
 __winfnc int MultiByteToWideChar(UINT code_page, DWORD flags, const char *mbstr, int mblen, char16_t *wstr, int wlen) {
-    if(mblen < 0) mblen = strlen(mbstr);
-    if(mblen == 0) {
-        winerr_set();
+    if(!mbstr || mblen == 0) {
+        winerr_set_code(ERROR_INVALID_PARAMETER);
         return 0;
     }
 
+    size_t bytes = (mblen < 0) ? strlen(mbstr) + 1 : (size_t) mblen;
+
     mbstate_t mbs = {0};
-    int sz = mbrtoc16((0 < wlen) ? wstr : NULL, mbstr, mblen, &mbs);
-    if(sz > 0) return sz;
-    winerr_set();
-    return 0;
+    size_t total = 0, off = 0;
+    while(off < bytes) {
+        char16_t ch = 0;
+        size_t sz = mbrtoc16(&ch, mbstr + off, bytes - off, &mbs);
+
+        if(sz == (size_t) -1 || sz == (size_t) -2) {
+            winerr_set_code(ERROR_NO_UNICODE_TRANSLATION);
+            return 0;
+        } else if(sz == (size_t) -3) {
+            //Low half of a surrogate pair whose bytes were already consumed;
+            //emit it without advancing the input.
+        } else {
+            //A return of 0 means the NUL character was converted.
+            off += (sz == 0) ? 1 : sz;
+        }
+
+        if(wlen > 0) {
+            if(total >= (size_t) wlen) {
+                winerr_set_code(ERROR_INSUFFICIENT_BUFFER);
+                return 0;
+            }
+            wstr[total] = ch;
+        }
+        total++;
+    }
+
+    winerr_clear();
+    return (int) total;
 }
 WINAPI(MultiByteToWideChar)
 
-__winfnc int WideCharToMultiByte(UINT code_page, DWORD flags, const char16_t *wstr, int wlen, char *mbstr, int mblen) {
-    if(wlen < 0) wlen = winstr_len(wstr);
-    if(wlen == 0) {
-        winerr_set();
+__winfnc int WideCharToMultiByte(UINT code_page, DWORD flags, const char16_t *wstr, int wlen, char *mbstr, int mblen, const char *default_char, BOOL *used_default) {
+    if(!wstr || wlen == 0) {
+        winerr_set_code(ERROR_INVALID_PARAMETER);
         return 0;
     }
+    if(used_default) *used_default = FALSE;
+
+    size_t units = (wlen < 0) ? (size_t) winstr_len(wstr) + 1 : (size_t) wlen;
 
     mbstate_t mbs = {0};
-    int sz = c16rtomb((0 < mblen) ? mbstr : NULL, *wstr, &mbs);
-    if(sz > 0) return sz;
-    winerr_set();
-    return 0;
+    size_t total = 0;
+    char tmp[MB_LEN_MAX];
+    for(size_t i = 0; i < units; i++) {
+        size_t sz = c16rtomb(tmp, wstr[i], &mbs);
+        if(sz == (size_t) -1) {
+            winerr_set_code(ERROR_NO_UNICODE_TRANSLATION);
+            return 0;
+        }
+        //A high surrogate produces no bytes until its pair arrives.
+        if(sz == 0) continue;
+
+        if(mblen > 0) {
+            if(total + sz > (size_t) mblen) {
+                winerr_set_code(ERROR_INSUFFICIENT_BUFFER);
+                return 0;
+            }
+            memcpy(mbstr + total, tmp, sz);
+        }
+        total += sz;
+    }
+
+    winerr_clear();
+    return (int) total;
 }
 WINAPI(WideCharToMultiByte)
 

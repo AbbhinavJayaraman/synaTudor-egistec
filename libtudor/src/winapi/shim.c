@@ -76,43 +76,41 @@ WINAPI(SHGetSpecialFolderPathA)
 //These used to return 0 without writing anything, so every string the driver
 //formatted came back empty. wsprintf's documented cap is 1024 chars including
 //the terminator.
+//
+//Both of these are variadic __winfnc, so their arguments follow the Microsoft
+//x64 convention and must be walked with win_va_arg - handing a plain va_list to
+//vsnprintf reads a SysV register save area that an ms_abi prologue never wrote,
+//which is exactly how the sensor adapter's
+//"SYSTEM\CurrentControlSet\Enum\%s\Device Parameters" turned into a SIGSEGV
+//inside glibc. See src/winapi/format.c.
 #define WSPRINTF_MAX 1024
 
 __winfnc int wsprintfA(char *dest, const char *fmt, ...) {
     if(!dest || !fmt) return 0;
 
-    va_list args;
-    va_start(args, fmt);
-    int len = vsnprintf(dest, WSPRINTF_MAX, fmt, args);
-    va_end(args);
+    win_va_list args;
+    win_va_start(args, fmt);
+    size_t len = winfmt_vformat(dest, WSPRINTF_MAX, fmt, false, WINFMT_ARGS_DIRECT, args);
+    win_va_end(args);
 
-    if(len < 0) { dest[0] = '\0'; return 0; }
     if(len >= WSPRINTF_MAX) len = WSPRINTF_MAX - 1;
-    return len;
+    return (int) len;
 }
 WINAPI(wsprintfA)
 
 __winfnc int wsprintfW(char16_t *dest, const char16_t *fmt, ...) {
     if(!dest || !fmt) return 0;
 
-    //Narrow the format, run it, then widen the result. The driver only uses
-    //this for log and identifier strings, so the round trip is acceptable.
-    char *cfmt = winstr_to_str(fmt);
-    if(!cfmt) { dest[0] = 0; return 0; }
-
     char buf[WSPRINTF_MAX];
-    va_list args;
-    va_start(args, fmt);
-    int len = vsnprintf(buf, sizeof(buf), cfmt, args);
-    va_end(args);
-    free(cfmt);
+    win_va_list args;
+    win_va_start(args, fmt);
+    size_t len = winfmt_vformat(buf, sizeof(buf), fmt, true, WINFMT_ARGS_DIRECT, args);
+    win_va_end(args);
 
-    if(len < 0) { dest[0] = 0; return 0; }
     if(len >= WSPRINTF_MAX) len = WSPRINTF_MAX - 1;
-
-    for(int i = 0; i < len; i++) dest[i] = (char16_t) (unsigned char) buf[i];
+    for(size_t i = 0; i < len; i++) dest[i] = (char16_t) (unsigned char) buf[i];
     dest[len] = 0;
-    return len;
+    return (int) len;
 }
 WINAPI(wsprintfW)
 
@@ -135,7 +133,20 @@ __winfnc int lstrlenW(const char16_t *lpString) {
 }
 WINAPI(lstrlenW)
 
-__winfnc int StrCmpNIW(const char16_t *s1, const char16_t *s2, int n) { return 0; }
+//Returning 0 unconditionally meant "the strings match", so every caller
+//comparing a name against a literal got a false positive - including the engine's
+//hardware-key scan, which would have accepted whatever subkey came back first.
+__winfnc int StrCmpNIW(const char16_t *s1, const char16_t *s2, int n) {
+    if(!s1 || !s2) return s1 == s2 ? 0 : (s1 ? 1 : -1);
+    for(int i = 0; i < n; i++) {
+        char16_t a = s1[i], b = s2[i];
+        if(a >= u'A' && a <= u'Z') a = (char16_t) (a - u'A' + u'a');
+        if(b >= u'A' && b <= u'Z') b = (char16_t) (b - u'A' + u'a');
+        if(a != b) return a < b ? -1 : 1;
+        if(!a) break;
+    }
+    return 0;
+}
 WINAPI(StrCmpNIW)
 
 __winfnc char16_t* StrStrW(const char16_t *pszFirst, const char16_t *pszSrch) { return NULL; }
@@ -178,8 +189,8 @@ WINAPI(RegDeleteKeyValueW)
 __winfnc LSTATUS RegSetKeyValueW(HANDLE hKey, const char16_t *lpSubKey, const char16_t *lpValueName, DWORD dwType, const void *lpData, DWORD cbData) { return ERROR_SUCCESS; }
 WINAPI(RegSetKeyValueW)
 
-__winfnc LSTATUS RegEnumKeyW(HANDLE hKey, DWORD dwIndex, char16_t *lpName, DWORD *lpcchName, void *lpReserved, char16_t *lpClass, DWORD *lpcchClass, void *lpftLastWriteTime) { return 259; } 
-WINAPI(RegEnumKeyW)
+//RegEnumKeyW now lives in reg.c, where the key model is. The stub here also
+//had RegEnumKeyExW's parameter list, which is a different function.
 
 __winfnc LSTATUS RegEnumValueA(HANDLE hKey, DWORD dwIndex, char *lpValueName, DWORD *lpcchValueName, void *lpReserved, DWORD *lpType, BYTE *lpData, DWORD *lpcbData) { return 259; }
 WINAPI(RegEnumValueA)

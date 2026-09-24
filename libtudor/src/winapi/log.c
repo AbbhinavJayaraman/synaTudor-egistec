@@ -2,67 +2,20 @@
 #include <pthread.h>
 #include "internal.h"
 
+//Kept as a thin wrapper so the trace paths below read the same as before. The
+//scanner itself now lives in format.c, which walks the MS-ABI argument list and
+//validates every pointer before dereferencing it.
+//
+//The previous hand-rolled scanner had two defects worth naming. It printed
+//driver-supplied pointers straight through printf("%s", ...), so one bad
+//argument killed the process inside glibc instead of logging. And an
+//unrecognised specifier consumed no argument while the caller had pushed one,
+//which silently shifted every following argument by a slot - after which a %s
+//would read a neighbouring integer as a pointer.
 void winlog_printf(const char *format, bool ptr_mode, win_va_list va) {
-    for(const char *p = format; *p; p++) {
-        char c = *p;
-        switch(c) {
-            case '%': {
-                //Determine format specifier attributes
-                int frmt_len = 1;
-                for(; *(p + frmt_len); frmt_len++) {
-                    char nc = *(p + frmt_len);
-                    switch(nc) {
-                        case 'd':
-                        case 'u':
-                        case 'x':
-                        case 'p':
-                        case 's':
-                        case '%': break;
-
-                        default: printf("[Unknown format specifier %c]", nc); break;
-                    }
-                    break;
-                }
-
-                //Print format specifier
-                switch(*(p + frmt_len)) {
-                    case 'd': {
-                        if(!ptr_mode) printf("%d", win_va_arg(va, int)); 
-                        else {
-                            printf("%d", *win_va_arg(va, int*));
-                            win_va_arg(va, size_t);
-                        }
-                    } break;
-                    case 'u': {
-                        if(!ptr_mode) printf("%u", win_va_arg(va, unsigned int)); 
-                        else {
-                            printf("%u", *win_va_arg(va, unsigned int*));
-                            win_va_arg(va, size_t);
-                        }
-                    } break;
-                    case 'x': {
-                        if(!ptr_mode) printf("%x", win_va_arg(va, unsigned int)); 
-                        else {
-                            printf("%x", *win_va_arg(va, unsigned int*));
-                            win_va_arg(va, size_t);
-                        }
-                    } break;
-                    case 'p': {
-                        printf("%p", win_va_arg(va, void*));
-                        if(ptr_mode) win_va_arg(va, size_t);  
-                    } break;
-                    case 's': {
-                        printf("%s", win_va_arg(va, char*));
-                        if(ptr_mode) win_va_arg(va, size_t);  
-                    } break;
-                    case '%': putc('%', stdout); break;
-                }
-
-                p += frmt_len;
-            } break;
-            default: putc(c, stdout);
-        }
-    }
+    char buf[1024];
+    winfmt_vformat(buf, sizeof(buf), format, false, ptr_mode ? WINFMT_ARGS_PTR_SIZE : WINFMT_ARGS_DIRECT, va);
+    fputs(buf, stdout);
 }
 
 static pthread_rwlock_t trace_msgs_lock = PTHREAD_RWLOCK_INITIALIZER;
@@ -120,6 +73,7 @@ __winfnc ULONG DbgPrintEx(ULONG comp_id, ULONG level, const char *format, ...) {
     cant_fail_ret(pthread_mutex_lock(&LOG_LOCK));
     printf("[DbgPrintEx] ");
     winlog_printf(format, false, vas);
+    printf("\n");
     cant_fail_ret(pthread_mutex_unlock(&LOG_LOCK));
     win_va_end(vas);
     return 0;
@@ -201,15 +155,25 @@ __winfnc ULONG TraceMessage(HANDLE handle, ULONG flags, GUID *guid, USHORT num, 
 }
 WINAPI(TraceMessage)
 
-/* --- ADD THIS TO THE END OF log.c --- */
-
 __winfnc void OutputDebugStringA(const char *lpOutputString) {
-    // Print driver logs to our console so we can see them!
-    printf("[Driver] %s\n", lpOutputString);
+    //Driver diagnostics are the main way the adapters explain themselves, so
+    //print them - but through the same pointer check the formatter uses, since a
+    //bad argument here would otherwise fault inside glibc.
+    cant_fail_ret(pthread_mutex_lock(&LOG_LOCK));
+    printf("[Driver] ");
+    winfmt_put_checked_str(stdout, lpOutputString, false);
+    printf("\n");
+    cant_fail_ret(pthread_mutex_unlock(&LOG_LOCK));
 }
 WINAPI(OutputDebugStringA)
 
-__winfnc void OutputDebugStringW(const void *lpOutputString) {
-    // Unicode version stub - harder to print, but prevents crash
+__winfnc void OutputDebugStringW(const char16_t *lpOutputString) {
+    //This used to discard its argument, which threw away whatever the driver
+    //was trying to say at exactly the points where it is most useful.
+    cant_fail_ret(pthread_mutex_lock(&LOG_LOCK));
+    printf("[Driver] ");
+    winfmt_put_checked_str(stdout, lpOutputString, true);
+    printf("\n");
+    cant_fail_ret(pthread_mutex_unlock(&LOG_LOCK));
 }
 WINAPI(OutputDebugStringW)

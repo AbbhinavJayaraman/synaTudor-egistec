@@ -74,6 +74,23 @@ typedef __builtin_ms_va_list win_va_list;
 #define win_va_copy(a, b) __builtin_ms_va_copy(a, b)
 #define win_va_arg(list, type) __builtin_va_arg(list, type)
 
+//How the arguments behind a format string are laid out.
+enum winfmt_args {
+    //Ordinary printf: each argument is the value itself.
+    WINFMT_ARGS_DIRECT,
+    //WPP/TraceMessage: each argument is a pointer to the value, followed by
+    //the value's size.
+    WINFMT_ARGS_PTR_SIZE
+};
+
+//Formats a Windows format string against an MS-ABI vararg list. fmt is
+//char16_t* when fmt_wide is set, which also makes a bare %s mean a wide
+//string. Returns the length the result would have had, like snprintf.
+size_t winfmt_vformat(char *dst, size_t dst_size, const void *fmt, bool fmt_wide, enum winfmt_args mode, win_va_list va);
+
+//Prints a bare driver-supplied string, checking the pointer first.
+void winfmt_put_checked_str(FILE *f, const void *str, bool wide);
+
 void winlog_printf(const char *format, bool ptr_mode, win_va_list vas);
 
 void winlog_register_trace_msg(GUID guid, int num, const char *format);
@@ -107,6 +124,13 @@ enum winreg_val_type {
 
 typedef bool winreg_handler_fnc(void *ctx, void *ctx_obj, const char *key_name, const char *val_name, bool is_write, void *buf, size_t *buf_size, enum winreg_val_type *val_type);
 void winreg_set_handler(winreg_handler_fnc *handler, void *ctx);
+
+//Subkey enumeration. Separate from the value handler because the registry model
+//here is name-based and has no tree to walk - a key only exists as the string
+//that names it. Returns false once index is past the last subkey.
+typedef bool winreg_enum_handler_fnc(void *ctx, const char *key_name, uint32_t index, char *name_buf, size_t name_buf_size);
+void winreg_set_enum_handler(winreg_enum_handler_fnc *handler, void *ctx);
+bool winreg_enum_subkey(HANDLE key, uint32_t index, char *name_buf, size_t name_buf_size);
 
 HANDLE winreg_open_key(void *ctx_obj, const char *key_name);
 const char *winreg_get_key_name(HANDLE key);

@@ -68,5 +68,6 @@ extern WINBIO_ENGINE_INTERFACE *tudor_engine_adapter;
 extern WINBIO_STORAGE_INTERFACE *tudor_storage_adapter;
 
 bool tudor_reg_handler(void *ctx, void *ctx_obj, const char *key_name, const char *val_name, bool is_write, void *buf, size_t *buf_size, enum winreg_val_type *val_type);
+bool tudor_reg_enum_handler(void *ctx, const char *key_name, uint32_t index, char *name_buf, size_t name_buf_size);
 
 #endif

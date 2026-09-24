@@ -26,8 +26,11 @@ static const struct reg_dword winbio_config_values[] = {
     { "SystemSensor", 1 },   //Usable for UAC / Winlogon
 };
 
-//[ContactSensor_AddReg] - the INF writes these under a subkey whose name is
-//"EgisTouchFP0575" followed by a trailing space.
+//[ContactSensor_AddReg] - "HKR,EgisTouchFP0575\ ,..." in the INF. HKR is the
+//device's hardware key, so on Windows these live under
+//  HKLM\SYSTEM\CurrentControlSet\Enum\<instance id>\Device Parameters\EgisTouchFP0575
+//which is also the path EgisTouchFP0575.dll builds for itself (see the format
+//string at EgisTouchFP0575.c:9915 in the Ghidra dump).
 //These are the sensor tuning parameters the driver reads at startup.
 static const struct reg_dword contact_sensor_values[] = {
     { "RemoteWakeupEnable", 0x00000001 },
@@ -67,6 +70,52 @@ static const struct reg_key reg_keys[] = {
     REG_KEY("HKEY_LOCAL_MACHINE\\Tudor\\Driver\\WinBio\\Configurations\\0", winbio_config_values),
 };
 
+//The device hardware key's name contains the USB instance ID, which is only
+//known at runtime, so these two cannot be matched literally like the table
+//above. Both are "HKLM\SYSTEM\CurrentControlSet\Enum\" + <instance> + suffix.
+#define ENUM_KEY_PREFIX "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\"
+#define DEVICE_PARAMS_SUFFIX "\\Device Parameters"
+
+//The subkey the INF creates under Device Parameters. The engine only checks the
+//first four characters against "Egis" (FUN_18001a910), but the driver's own
+//format string spells it out in full, so use that.
+#define EGIS_PARAMS_SUBKEY "EgisTouchFP0575"
+
+static bool str_has_prefix(const char *s, const char *prefix) {
+    size_t n = strlen(prefix);
+    return strncasecmp(s, prefix, n) == 0;
+}
+
+static bool str_has_suffix(const char *s, const char *suffix) {
+    size_t sl = strlen(s), fl = strlen(suffix);
+    return sl >= fl && strcasecmp(s + sl - fl, suffix) == 0;
+}
+
+//True for the device's own hardware key.
+static bool is_device_params_key(const char *key_name) {
+    return str_has_prefix(key_name, ENUM_KEY_PREFIX) && str_has_suffix(key_name, DEVICE_PARAMS_SUFFIX);
+}
+
+//True for the EgisTouchFP0575 subkey underneath it.
+static bool is_device_params_subkey(const char *key_name) {
+    return str_has_prefix(key_name, ENUM_KEY_PREFIX) &&
+           str_has_suffix(key_name, DEVICE_PARAMS_SUFFIX "\\" EGIS_PARAMS_SUBKEY);
+}
+
+bool tudor_reg_enum_handler(void *ctx, const char *key_name, uint32_t index, char *name_buf, size_t name_buf_size) {
+    if(!key_name || !name_buf) return false;
+
+    //Only the hardware key has subkeys worth reporting. Everything else
+    //enumerates empty, which is what a real key with no children does.
+    if(is_device_params_key(key_name) && index == 0) {
+        if(strlen(EGIS_PARAMS_SUBKEY) + 1 > name_buf_size) return false;
+        strcpy(name_buf, EGIS_PARAMS_SUBKEY);
+        return true;
+    }
+
+    return false;
+}
+
 static bool put_dword(uint32_t value, void *buf, size_t *buf_size, enum winreg_val_type *val_type) {
     //A NULL buffer is a size query; a buffer that is too small is an error.
     if(buf) {
@@ -84,6 +133,22 @@ bool tudor_reg_handler(void *ctx, void *ctx_obj, const char *key_name, const cha
     if(!buf_size || !key_name || !val_name) return false;
 
     log_debug("REG: Read Key='%s' Val='%s'", key_name, val_name);
+
+    //The hardware-key path is matched by shape, not by name - see above.
+    const struct reg_dword *pattern_values = NULL;
+    size_t num_pattern_values = 0;
+    if(is_device_params_subkey(key_name)) {
+        pattern_values = contact_sensor_values;
+        num_pattern_values = sizeof(contact_sensor_values) / sizeof(contact_sensor_values[0]);
+    } else if(is_device_params_key(key_name)) {
+        //[Biometric_Device_AddReg] writes its values directly to HKR.
+        pattern_values = device_values;
+        num_pattern_values = sizeof(device_values) / sizeof(device_values[0]);
+    }
+    for(size_t j = 0; j < num_pattern_values; j++) {
+        if(strcasecmp(val_name, pattern_values[j].name) != 0) continue;
+        return put_dword(pattern_values[j].value, buf, buf_size, val_type);
+    }
 
     for(size_t i = 0; i < sizeof(reg_keys) / sizeof(reg_keys[0]); i++) {
         const struct reg_key *key = &reg_keys[i];

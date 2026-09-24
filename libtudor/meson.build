@@ -34,6 +34,7 @@ libtudor_src = [
     'src/winapi/io.c',
     'src/winapi/system.c',
     'src/winapi/shim.c',
+    'src/winapi/format.c',
 
     'src/winapi/crypt/rsa_aes.c',
     'src/winapi/crypt/evp_digest.c',

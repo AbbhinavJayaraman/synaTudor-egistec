@@ -29,8 +29,16 @@ typedef struct {
     BCryptBuffer *pBuffers;
 } BCryptBufferDesc;
 
+//BCRYPT_RNG_ALGORITHM. The engine adapter opens this provider during Attach and
+//was refused, because the table had no entry for it. There is nothing to
+//implement behind it: BCryptGenRandom ignores the algorithm handle and draws
+//from RAND_bytes, so the provider only has to exist. It deliberately carries no
+//key or cipher operations - anything else asked of it fails loudly rather than
+//silently doing the wrong thing.
+struct bcrypt_algorithm bcrypt_algo_rng = { .name = "RNG" };
+
 struct bcrypt_algorithm *bcrypt_algos[] = {
-    &bcrypt_algo_aes,
+    &bcrypt_algo_aes, &bcrypt_algo_rng,
     (struct bcrypt_algorithm*) &bcrypt_algo_ecdh_p256, (struct bcrypt_algorithm*) &bcrypt_algo_ecdsa_p256,
     (struct bcrypt_algorithm*) &bcrypt_algo_sha1, (struct bcrypt_algorithm*) &bcrypt_algo_sha256,
     (struct bcrypt_algorithm*) &bcrypt_algo_sha384, (struct bcrypt_algorithm*) &bcrypt_algo_sha512,

@@ -19,6 +19,14 @@ void winreg_set_handler(winreg_handler_fnc *handler, void *ctx) {
     reg_context = ctx;
 }
 
+static winreg_enum_handler_fnc *reg_enum_handler;
+static void *reg_enum_context;
+
+void winreg_set_enum_handler(winreg_enum_handler_fnc *handler, void *ctx) {
+    reg_enum_handler = handler;
+    reg_enum_context = ctx;
+}
+
 struct reg_key {
     void *ctx_obj;
     char *name;
@@ -80,6 +88,41 @@ bool winreg_write_val(HANDLE hkey, const char *val_name, const void *buf, size_t
     log_verbose("REGWRITE | ctx %18p key '%s' value '%s' val type %d buf size %lu suc %d", key->ctx_obj, key->name, val_name, val_type, buf_size, suc);
     return suc;
 }
+
+bool winreg_enum_subkey(HANDLE hkey, uint32_t index, char *name_buf, size_t name_buf_size) {
+    if(!reg_enum_handler || !name_buf || name_buf_size == 0) return false;
+
+    const char *name = key_name(hkey);
+    bool suc = reg_enum_handler(reg_enum_context, name, index, name_buf, name_buf_size);
+    log_verbose("REGENUM  | key '%s' index %u -> %s", name, index, suc ? name_buf : "(no more)");
+    return suc;
+}
+
+//The engine adapter walks the subkeys of its own hardware key looking for the
+//one the INF created, at FUN_18001a910 in EgisTouchFPEngine0575:
+//
+//  while ((LVar2 = RegEnumKeyW(hkey, i, name, ...), LVar2 != 0 ||
+//         (StrCmpNIW(name, L"Egis", 4) != 0))) i++;
+//
+//Note what is missing: ERROR_NO_MORE_ITEMS does not end that loop. The only way
+//out is a successful enumeration whose name starts with "Egis", because on
+//Windows the key is always there. A stub returning ERROR_NO_MORE_ITEMS
+//therefore does not degrade gracefully - it hangs the process in a tight loop.
+__winfnc LSTATUS RegEnumKeyW(HANDLE hkey, DWORD index, char16_t *name, DWORD name_size) {
+    if(!name || name_size == 0) return ERROR_INVALID_PARAMETER;
+
+    char buf[256];
+    if(!winreg_enum_subkey(hkey, index, buf, sizeof(buf))) return ERROR_NO_MORE_ITEMS;
+
+    //name_size is a character count, and it must fit the terminator too.
+    size_t len = strlen(buf);
+    if(len + 1 > name_size) return ERROR_MORE_DATA;
+
+    for(size_t i = 0; i < len; i++) name[i] = (char16_t) (unsigned char) buf[i];
+    name[len] = 0;
+    return ERROR_SUCCESS;
+}
+WINAPI(RegEnumKeyW)
 
 __winfnc LONG RegOpenKeyExA(HANDLE hkey, const char *subkey, DWORD opts, DWORD sam, HANDLE *out) {
     if(!subkey) {

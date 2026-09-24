@@ -74,6 +74,29 @@ It prints a warning and waits for `y`. The lines that matter:
   own logging. The engine is compiled with verbose entry/exit traces, so it
   narrates its own failures. Use them.
 
+### Debugging without the sensor
+
+`tudor_init()` and most of `tudor_open()` never touch the hardware, and
+everything `egis.c` sends leaves through `libusb_bulk_transfer`. So
+`tools/bringup_nosensor.c` stands the sensor in by defining the libusb entry
+points itself - symbols in the executable win over `libusb.so` for lookups from
+`libtudor.so` - and drives the real `tudor_init()` and `tudor_open()` against it:
+
+```sh
+./build/tools/bringup_nosensor        # -u also dumps the simulated USB traffic
+gdb --args ./build/tools/bringup_nosensor
+```
+
+Use this first for anything in DLL bring-up, the Win32 shim or the registry. It
+runs unprivileged, so gdb works normally - no sudo, and none of the
+`RLIMIT_CORE` trouble below. It is how the `wsprintfW` crash and the
+`RegEnumKeyW` hang were found. It exits 3 on a clean `tudor_open` failure.
+
+`meson test` runs the shim unit tests in `tools/` (`test_format`,
+`test_convert`). Both deliberately call in through the Microsoft vararg
+convention, because calling them the SysV way would not exercise the bug the
+formatter exists to fix.
+
 Before pushing, link-check: meson passes `-Wl,--no-undefined`, and a permissive
 link will hide dangling references. Two real breaks were caught that way.
 
@@ -93,60 +116,107 @@ without a password prompt during a session. Two gotchas hit already:
 - sudo zeroes `RLIMIT_CORE` for the child process, so a crash under `sudo
   tudor_cli` produces **no coredump** even with `ulimit -c unlimited` in the
   parent shell (`systemd-coredump` logs "Resource limits disable core
-  dumping"). Getting a real backtrace needs `sudo gdb --args
-  /sbin/tudor/tudor_cli ...`, which is not yet in the NOPASSWD rule (ask the
-  user before adding it, or ask them to run the gdb invocation directly).
+  dumping"). Getting a real backtrace under the CLI needs `sudo gdb --args
+  /sbin/tudor/tudor_cli ...`, which is not in the NOPASSWD rule (ask the user
+  before adding it, or ask them to run the gdb invocation directly). Usually you
+  do not have to: if the fault is anywhere in DLL bring-up, the shim or the
+  registry, reproduce it under `tools/bringup_nosensor` instead, which needs no
+  sudo at all.
 
-## Current state (as of b192358)
+## Current state
 
-**Blocked before the previously-recorded failure can even be re-tested.** A
-fresh hardware run (build from `b192358`, clean build, no code changes)
-segfaults:
+Not working end to end yet, but the segfault and the hang are gone and the
+failure is now a clean, precisely located one.
 
-- `sudo ninja -C build install` then `sudo /sbin/tudor/tudor_cli
-  ~/tudor-store.bin -vvt` crashes with SIGSEGV. The trace never reaches a
-  `[DEVCTRL]` line or a `>>> CTouchSensor::` line, so this is happening
-  earlier than DLL `Attach` - somewhere during/after `DllMain` and Win32 API
-  shim resolution (the last output is repeated `[SPY] GetProcAddress`
-  lines for the second DLL's imports).
-- Kernel log: `segfault at 2 ip 00007eff5e3b4b9d ... in libc.so.6[1b4b9d,...]`
-  - address `0x2` is a near-null pointer, small enough to suggest a
-    `wcs*`-family (wide-char, 2-byte unit) function called on a bad/null
-    pointer, but this is a guess, not confirmed.
-  - **No backtrace obtained yet** - see the sudo/`RLIMIT_CORE` gotcha above.
-    Next step is `sudo gdb --args /sbin/tudor/tudor_cli ~/tudor-store.bin -vvt`
-    (needs a sudoers rule for `gdb`, not yet added) to find exactly where and
-    why.
+`tools/bringup_nosensor` (and the CLI) get through:
 
-This is a regression (or a previously-latent bug) relative to the `87015fb`
-narrative below, which was the last time the flow got as far as `Attach` -
-**that state has not been reproduced since.** Whether this crash is new
-(introduced somewhere in `19c9156`..`b192358`) or was always there and simply
-wasn't hit on the specific run that produced the `87015fb` notes is unknown -
-`git bisect` against hardware runs would settle it.
+- both DLLs relinked, relocated, through `DllMain`, both interfaces queried
+- the sensor initialised (`egis_init_sensor`)
+- `sensor_adapter->Attach` succeeding
+- the engine reading its hardware key, deriving its paths, and running its own
+  code, with its `[Driver]` log visible
+- then `engine_adapter->Attach` failing with `0x8000ffff` (`E_UNEXPECTED`),
+  because the engine's `IOCTL 0x4427c0` is not implemented - see thread 1.
 
-### Last known-good-ish state (87015fb narrative, unverified since)
+### The two failures fixed before that (both reproducible without hardware)
 
-- both DLLs relinked, relocated and through `DllMain`
-- the sensor initialised over USB (`egis_init_sensor` completes)
-- `sensor_adapter->Attach` **succeeding** - it consumed our
-  `WINBIO_SENSOR_ATTRIBUTES` without complaint
-- the engine executing its own code
-- then `engine_adapter->Attach` failing with `0x8000ffff` (`E_UNEXPECTED`)
+**A SIGSEGV inside glibc, which looked like it happened during DLL load.** It
+was `wsprintfW`: a variadic `__winfnc` is `ms_abi`, so its arguments arrive in
+rcx/rdx/r8/r9 per the Microsoft convention, and building a plain `va_list` in
+such a function and passing it to `vsnprintf` makes glibc read a SysV register
+save area that the `ms_abi` prologue never wrote. Every argument was stack
+garbage. The sensor adapter formats its instance ID into
+`"SYSTEM\CurrentControlSet\Enum\%s\Device Parameters"`, so `%s` got a junk
+pointer and glibc walked it.
 
-Two causes visible in that run were fixed in `87015fb` (BCrypt hash providers,
-IOCTL `0x220000`) but still have not been re-tested against hardware, because
-the new segfault above now happens first.
+Two things about how this presented are worth remembering:
+
+- It was latent from `19c9156` and only became reachable in `87015fb`, which
+  implemented `IOCTL 0x220000` - before that the adapter never got an instance
+  ID, so it never formatted the path.
+- The crash appeared to be in DLL load because `log_info`/`log_debug` go to
+  **stdout** while `[SPY]` goes to stderr. stdout was block-buffered, so the
+  trace explaining the crash died in the buffer and the last thing on screen
+  was unrelated stderr output. `tudor_init` now line-buffers stdout, and the
+  `[DEVCTRL]` line is built and written in one piece instead of being printed
+  in fragments around the work it describes.
+
+**An infinite loop in the engine, on a shim that returned a "safe" error.**
+`RegEnumKeyW` was a stub returning `ERROR_NO_MORE_ITEMS`. But the engine's
+`FUN_18001a910` is:
+
+```c
+while ((LVar2 = RegEnumKeyW(hkey, i, name, ...), LVar2 != 0 ||
+       (StrCmpNIW(name, L"Egis", 4) != 0))) i++;
+```
+
+`ERROR_NO_MORE_ITEMS` does not end that loop - nothing does except a successful
+enumeration returning a name starting with `Egis`, because on Windows the key is
+always there. The registry layer now supports subkey enumeration
+(`winreg_enum_subkey`, `tudor_reg_enum_handler`) and reports `EgisTouchFP0575`
+under the device's hardware key, which is where the INF's `HKR,EgisTouchFP0575\ `
+values actually live.
+
+Alongside those, three more shims were wrong in ways that produced plausible
+but false results rather than errors, and all three were on this path:
+
+- `WideCharToMultiByte`/`MultiByteToWideChar` converted **one character** and
+  returned. The engine narrows its hardware-key path before `RegOpenKeyExA`, so
+  the registry saw `Key='HKEY_LOCAL_MACHINE\S'` plus uninitialised stack.
+- `StrCmpNIW` returned 0 unconditionally, i.e. "equal" - so the loop above would
+  have accepted whatever subkey name came back first.
+- `BCryptOpenAlgorithmProvider("RNG")` failed, because the algorithm table had
+  no RNG entry. `BCryptGenRandom` already ignores the handle and uses
+  `RAND_bytes`, so the provider only had to exist.
 
 ## Open threads
 
-0. **Get a backtrace for the new early segfault** (see "Current state"). This
-   blocks everything below it - `Attach` can't be re-tested until the CLI
-   survives to issue any `DEVCTRL` calls at all.
+1. **`IOCTL 0x4427c0` - the current blocker.** The engine sends 208 bytes and
+   expects 208 back. This is not a sensor command: the driver's handler
+   (`FUN_18001c8c0` -> `FUN_180006f98` in `EgisTouchFP0575.c`) is pure
+   computation with no USB in it - a key derivation over a `"U2Vj"`-seeded
+   constant, an HMAC check, a 32-byte random, and an ECDH-shaped exchange. It is
+   a **mutual-authentication / session-key handshake between the engine adapter
+   and the driver**, entirely inside the Windows software stack.
 
-1. **Re-test `engine->Attach`** (blocked on #0). If it still fails, the
-   engine's `<<< EngineAdapterAttach : ErrorCode [0x%08X]` trace and the
-   surrounding `CTouchSensor::` lines say where.
+   Returning success with a zeroed 208-byte reply was tried and does not work -
+   the engine verifies the response cryptographically, and `Attach` still fails
+   with `0x8000ffff`. So this has to be implemented for real. Two routes:
+
+   - Port `FUN_180006f98` and the crypto helpers it calls
+     (`FUN_1800072b4` KDF, `FUN_180007b0c`/`FUN_1800074fc` MAC,
+     `FUN_180001ec0` exchange, `FUN_180002310`) plus the embedded constants at
+     `DAT_18003f888`/`DAT_18003f8b0`. Self-contained, but it is a protocol
+     reimplementation.
+   - Or map `EgisTouchFP0575.dll` as a PE image for this one function without
+     running its WDF `DllMain`, and call it directly. Cheaper if its state
+     dependencies are only the relocated statics - `FUN_180006f98` reads a
+     context through `param_1 + 8` that holds a 32-byte secret established
+     earlier, so check where that comes from first.
+
+   Worth settling before either: whether the engine can be attached at all
+   without this handshake, or whether it gates only Egis' own secure-image
+   feature. The Python driver in the sibling repo needs none of it.
 
 2. **`HKLM\SYSTEM\CurrentControlSet\Services\EgisFP\FPParameters`.** The engine
    reads `Optimization` and `SmartLearn` from it. This key is *not* in the INF,
@@ -158,7 +228,8 @@ the new segfault above now happens first.
    (`EgisTouchFP0575.c` around the `0x442xxx` comparisons in the Ghidra dump)
    has named handlers for `0x442004`, `0x44200c`, `0x442010`, `0x442014`,
    `0x442018`, `0x44201c`, `0x442020`, `0x442024` and a `0x442400-0x4427fc`
-   range. The engine is known to use `0x44200c` and `0x4427c0`. These log a
+   range. `0x4427c0` is now confirmed in use and is thread 1; `0x44200c` is
+   referenced by the engine but has not been seen on the wire yet. These log a
    warning and return `STATUS_NOT_SUPPORTED` rather than failing silently, so
    the trace shows which are actually needed. Implement on demand, not
    speculatively.
