@@ -131,8 +131,8 @@ bool egis_init_sensor(struct egis_device *dev) {
     return true;
 }
 
-//Reads one raw frame off the sensor. buf receives EGIS_IMG_BYTES of pixels,
-//already stripped of the 73 byte partial leading row.
+//Reads one raw frame off the sensor. The frame is exactly the image - see the
+//geometry comment in egis.h - so buf receives all EGIS_IMG_BYTES of it.
 static bool egis_read_frame_locked(struct egis_device *dev, uint8_t *buf) {
     if(!egis_cmd_seq(dev, egis_rearm_cmds, egis_rearm_sizes, ARRAY_LEN(egis_rearm_cmds), 0)) return false;
 
@@ -143,15 +143,25 @@ static bool egis_read_frame_locked(struct egis_device *dev, uint8_t *buf) {
         return false;
     }
 
+    //The frame is one logical transfer, but it does not have to arrive in one
+    //piece: 5356 is 10 full 512-byte packets plus a 236-byte short packet, and
+    //the Windows captures show the host controller delivering it as 5120 + 236
+    //under a single IRP. Accumulate until the frame is complete rather than
+    //assuming a single read covers it.
     uint8_t frame[EGIS_FRAME_BYTES];
-    err = libusb_bulk_transfer(dev->usb_dev, EGIS_EP_IN, frame, sizeof(frame), &transferred, EGIS_FRAME_TIMEOUT_MS);
-    if(err != 0) {
-        log_error("EGIS frame read failed: %d [%s]", err, libusb_error_name(err));
-        return false;
-    }
-    if(transferred < EGIS_FRAME_OFFSET + EGIS_IMG_BYTES) {
-        log_warn("Short EGIS frame: %d bytes, expected %d", transferred, EGIS_FRAME_OFFSET + EGIS_IMG_BYTES);
-        return false;
+    size_t got = 0;
+    while(got < sizeof(frame)) {
+        transferred = 0;
+        err = libusb_bulk_transfer(dev->usb_dev, EGIS_EP_IN, frame + got, (int) (sizeof(frame) - got), &transferred, EGIS_FRAME_TIMEOUT_MS);
+        if(err != 0) {
+            log_error("EGIS frame read failed after %zu of %zu bytes: %d [%s]", got, sizeof(frame), err, libusb_error_name(err));
+            return false;
+        }
+        if(transferred <= 0) {
+            log_warn("EGIS frame read stalled at %zu of %zu bytes", got, sizeof(frame));
+            return false;
+        }
+        got += (size_t) transferred;
     }
 
     memcpy(buf, frame + EGIS_FRAME_OFFSET, EGIS_IMG_BYTES);

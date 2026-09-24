@@ -4,7 +4,7 @@ Fork of [Popax21/synaTudor](https://github.com/Popax21/synaTudor), retargeted fr
 the Synaptics Tudor sensor family to the **EgisTec EH575** (USB `1c7a:0575`).
 
 Goal: make the sensor usable on Linux via fprintd. The sensor is too low
-resolution (103x49) for stock libfprint, so the Windows driver's own matching
+resolution (103x52) for stock libfprint, so the Windows driver's own matching
 engine is relinked and run natively instead.
 
 **Work on the `relinking` branch.** `relink` is the older, superseded approach -
@@ -167,13 +167,9 @@ containing one of those three tokens silently selects the 128 x 128 default.
 If `FUN_18001ad60` returns NULL the engine's `Attach` returns `0x8000ffff`
 immediately, so this is on the critical path.
 
-**Open question from this: the engine's ET510 class wants 103 x 52 = 5356 bytes,
-but a frame transfer is 5120 bytes and yields 49 full rows (49 x 103 = 5047
-after the 73-byte offset).** 52 rows do not fit in one transfer. So either the
-driver accumulates more than one transfer per frame, or the offset is not what a
-single frame looks like, or it pads. Do not "fix" the capture constants to make
-the arithmetic work - they come from the captures. Settle it against
-`python-egistec-eh575/wireshark/` first. This is thread 7.
+The 103 x 52 here matched the captures once they were read properly - see
+"Frame geometry (settled)" below. Two independent sources agreeing on the same
+geometry is the strongest evidence in this project so far.
 
 ## Current state
 
@@ -301,14 +297,12 @@ but false results rather than errors, and all three were on this path:
    exactly that), revisit this first.
 
 5. **Capture has never run.** `IOCTL_BIOMETRIC_CAPTURE_DATA` and the worker
-   thread in `egis.c` are written but untested. Finger detection is a frame
+   thread in `egis.c` are written but untested. The geometry they use is now
+   settled (103 x 52, one 5356-byte transfer), and the read accumulates rather
+   than assuming one `libusb_bulk_transfer` returns the whole frame. Finger detection is a frame
    variance threshold ported from the Python driver; the Windows driver has a
    real finger-detect register path instead (the INF sets `FingerOnThreshold=6`
    / `FingerOnThresholdLoose=2`), which has not been mapped.
-
-7. **ET510 geometry vs. frame size** - see the section above. The engine expects
-   103 x 52; capture yields 103 x 49. Resolve from the USB captures, not by
-   editing constants.
 
 6. **CLI interactions to watch.** `cli/src/main.c` runs its own
    `libusb_handle_events` thread while `egis.c` uses synchronous
@@ -325,10 +319,35 @@ the Windows stack are in `python-egistec-eh575/wireshark/`. The INF is in
 `egistecLighTuning0575/`. When you need to know what the Windows driver does
 with an IOCTL, read the handler in the dump rather than guessing.
 
-Frame geometry facts, derived from those captures: a frame transfer is exactly
-**5120 bytes**; autocorrelation peaks at lag **103** (r = 0.94, harmonics at
-206/309/412); row alignment is best at byte offset **73**. So the usable image
-is 103 x 49 starting at +73. Do not "fix" these to 103 x 50.
+### Frame geometry (settled)
+
+A frame is **one bulk IN transfer of 5356 bytes, which is exactly 103 x 52 with
+no header, no trailer and no offset.**
+
+USBPcap reports it as a 5120-byte read followed by a 236-byte read, but all 499
+such pairs in `windows-helllo.pcapng` carry the **same IRP id** - one logical
+transfer the host controller split - and 5120 + 236 = 5356. The pairing holds
+for all 639 frames across the three captures, and each is preceded by the
+`"EGIS" 64 14 ec` trigger that `egis.c` already sends.
+
+Evidence, reproducible from the captures:
+
+- width scan 95..115 over the highest-variance frames: **103** gives mean
+  consecutive-row r = 0.874, versus 0.819 for 102 and 104
+- offset scan 0..102 at width 103, fixed 50 rows for fairness: **offset 0 ranks
+  first of 103**, and the whole spread is only 0.006, as expected once the frame
+  divides evenly
+- rendering confirms it: at 103 x 52 offset 0 the frames are coherent
+  fingerprints; the old reading tears every frame with a displaced block
+
+Independent confirmation: the engine's `CET510Sensor` allocates 103 x 52.
+
+**Correcting the earlier note in this file:** it claimed 5120 bytes, offset 73,
+103 x 49, and warned against "fixing" it. The width was right and the rest was
+an artifact of only ever looking at the first chunk - `5120 mod 103 = 73`, so
+dropping 73 bytes is just what it takes to make a truncated buffer divide
+evenly. It was circular, not derived. If you find yourself picking an offset
+that happens to equal `len mod width`, suspect exactly this.
 
 ## Conventions
 
