@@ -70,9 +70,17 @@ It prints a warning and waits for `y`. The lines that matter:
 
 - `[DEVCTRL] -> in code 0x...` - every IOCTL the adapters issue, in order.
 - `[WRN] Unimplemented EGIS IOCTL 0x...` - one we do not handle yet.
-- `[Driver] ...` and `>>> CTouchSensor::EngineAdapter...` - the Egis DLLs'
-  own logging. The engine is compiled with verbose entry/exit traces, so it
-  narrates its own failures. Use them.
+- `[Driver] [SensorAdapter] ... >>> SensorAdapterStartCapture` / `<<< ... :
+  ErrorCode [0x...]` - the adapters' own entry/exit traces. **This is the best
+  diagnostic in the project**: both DLLs name every function they enter and
+  print the HRESULT they return, so they narrate their own failures. Use them
+  before reading the decompilation.
+
+  They are gated on `HKLM\SOFTWARE\EgisSDKDBG` (`EnableBlock` = component
+  mask, `DisplayFlag ` - trailing space is the DLL's own - > 0 to emit). `-t`
+  makes `reg.c` serve those two values; see `FUN_180001000` / `FUN_1800010e0`.
+  They were invisible for most of this project because `RegOpenKeyA` was a stub
+  returning `ERROR_FILE_NOT_FOUND`, so the DLLs never got to read the key.
 
 ### Debugging without the sensor
 
@@ -199,7 +207,8 @@ On hardware the CLI gets through:
 - `q` (query records) working, and a clean shutdown: deactivate, pipeline
   cleanup, detach, both DLLs uninitialised
 - `e` (enroll) reaching `CreateEnrollment`, then `StartCapture`, then the
-  capture thread polling frames at 20/s
+  capture thread polling frames at 20/s, **detecting a real finger press**, and
+  handing the frame to `FinishCapture` and `PushDataToEngine`
 
 **`tools/bringup_nosensor` no longer diverges** through `tudor_open` - it now
 reaches the same point as hardware and reports `tudor_open SUCCEEDED`. The
@@ -308,26 +317,35 @@ but false results rather than errors, and all three were on this path:
    reports `WINBIO_SENSOR_NOT_CALIBRATED` (the sensor DLL has a string for
    exactly that), revisit this first.
 
-5. **Capture runs; a finger has never been pressed.** The worker thread in
-   `egis.c` now drives real hardware: `StartCapture` succeeds and the thread
-   polls 5356-byte frames at 20/s, which is the geometry settled below. What
-   remains untested is everything downstream of an actual touch - the
-   `WINBIO_CAPTURE_DATA` reply, the adapter wrapping it into an ANSI 381 BIR,
-   and the engine matching it. Press a finger during `e` and read the trace.
+5. **Capture works; the engine handoff is the frontier.** A real press is
+   detected and the frame reaches the engine. `StartCapture`, the poll loop,
+   `FinishCapture` and `PushDataToEngine` are all exercised on hardware. What
+   has not been seen yet is `AcceptSampleData` returning success, an enrollment
+   committing, or a match.
 
-   Getting there needed two fixes worth remembering, both in the shape of the
-   request rather than the image: `0x440014` is a **two-call size negotiation**
-   (the adapter probes with a 0x18-byte buffer and reads the required size as a
-   DWORD at offset 0), and `WINBIO_CAPTURE_PARAMETERS` is `0x20` bytes with
-   **no `WinBioType` field** - the phantom one shifted every field by four.
+   Three struct/protocol fixes got it this far, all of the same kind - **this
+   driver's IOCTL structs are not the documented WinBIO ones**, so check every
+   field against the code that builds or reads it:
 
-   Finger detection is still the frame-variance threshold ported from the
-   Python driver, and it is now observable: the loop logs variance every ~1s at
-   `LOG_VERBOSE`. On this sensor an **idle platen reads 40-400 against a
-   threshold of 961**, so there is headroom but less than the numbers suggest -
-   the empty-platen reading is noisy, not flat. The Windows driver uses a real
-   finger-detect register path instead (the INF sets `FingerOnThreshold=6` /
-   `FingerOnThresholdLoose=2`), which has still not been mapped.
+   - `0x440014` is a **two-call size negotiation** (the adapter probes with a
+     0x18-byte buffer and reads the required size as a DWORD at offset 0).
+   - `WINBIO_CAPTURE_PARAMETERS` is `0x20` bytes with **no `WinBioType`**.
+   - `WINBIO_CAPTURE_DATA` has **no `Format`/`VendorFormat`**: the sample size
+     is a ULONG at `+0x10` and the sample starts at `+0x14`. The old layout put
+     the format pair at `+0x10`, so the adapter read `001b:0401` as a 67MB
+     sample size and passed the GUID field as the sample - `E_INVALIDARG`.
+
+   Finger detection is the frame-variance threshold ported from the Python
+   driver, and it works: on hardware an **idle platen reads 40-600 and a press
+   reads 1000-2500, against a threshold of 961**. That margin is thinner than
+   it looks - idle frames are noisy, not flat, and an idle reading of 1017 has
+   been seen trigger the clear-wait. If false triggers show up, this is why;
+   the Windows driver uses a real finger-detect register path instead (the INF
+   sets `FingerOnThreshold=6` / `FingerOnThresholdLoose=2`), still unmapped.
+
+   Note the capture thread waits for the platen to be **clear** before it waits
+   for a finger, so a press held from the start is not consumed. Both phases
+   now announce themselves at `LOG_INFO`.
 
 6. **CLI interactions to watch.** `cli/src/main.c` runs its own
    `libusb_handle_events` thread while `egis.c` uses synchronous
@@ -393,10 +411,15 @@ that happens to equal `len mod width`, suspect exactly this.
   `_Static_assert` (see `WINBIO_SENSOR_ATTRIBUTES` in `winbio.h`, asserted
   against `+0x21c`, `+0x624`, `+0x628` and size `0x62c`).
 - Do not weaken a shim into a stub that returns a plausible-looking constant.
-  Three such stubs cost real debugging time here: a semaphore faked as an
-  auto-reset event, threadpool waits that never fired, and `BCryptFinishHash`
-  zeroing its output so every digest was constant. If something cannot be
+  Four such stubs cost real debugging time here: a semaphore faked as an
+  auto-reset event, threadpool waits that never fired, `BCryptFinishHash`
+  zeroing its output so every digest was constant, and - the most expensive -
+  `RegOpenKeyA` returning `ERROR_FILE_NOT_FOUND`, which silently disabled both
+  adapters' entire trace output for most of the project. If something cannot be
   implemented, log loudly and return a real error.
+- A stub that disables *diagnostics* is the worst kind, because it removes the
+  evidence you would use to find it. When something is inexplicably silent,
+  check what the DLL had to call to decide whether to speak.
 
 ## Related repos
 
