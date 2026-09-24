@@ -190,9 +190,16 @@ geometry is the strongest evidence in this project so far.
 ## Current state
 
 `tudor_open` succeeds on hardware. The CLI opens the device, lists records,
-starts an enrollment, and polls real frames off the sensor. What has *not*
-happened yet is an actual finger press, so nothing has been captured, enrolled
-or matched end to end.
+starts an enrollment, polls real frames off the sensor, and **detects a real
+finger press** and hands that frame to the engine. The frontier is what the
+engine does with it: `AcceptSampleData` has not yet returned success, so
+nothing has been enrolled or matched end to end.
+
+The last thing seen on hardware was `AcceptSampleData` rejecting the sample
+with `E_INVALIDARG`, traced to the `WINBIO_CAPTURE_DATA` layout (thread 5).
+That fix is in but **has not been confirmed on hardware** - it needs a press to
+test, and it was reasoned from the decompilation. Re-run `e` with `-t` and read
+`<<< EngineAdapterAcceptSampleData : hr = [0x%08X]` before assuming it works.
 
 On hardware the CLI gets through:
 
@@ -200,7 +207,8 @@ On hardware the CLI gets through:
 - the sensor initialised (`egis_init_sensor`)
 - all three `Attach` calls succeeding
 - the engine reading its hardware key, deriving its paths, and running its own
-  code, with its `[Driver]` log visible
+  code, with both its `[Driver]` log and (under `-t`) the adapters' own
+  `>>>`/`<<<` entry/exit traces visible
 - `IOCTL 0x4427c0` logged as unimplemented - **and the run continues anyway**,
   see thread 1
 - `QueryStatus` returning `WINBIO_SENSOR_READY`, so `tudor_open` returns true
@@ -311,11 +319,22 @@ but false results rather than errors, and all three were on this path:
    the trace shows which are actually needed. Implement on demand, not
    speculatively.
 
-4. **`CALIBRATE` (`0x44000c`) is a guess.** It returns success with a zeroed
-   block, because the USB captures show no separate calibration exchange - the
-   register programming in `egis_init_sensor` appears to be it. If the adapter
-   reports `WINBIO_SENSOR_NOT_CALIBRATED` (the sensor DLL has a string for
-   exactly that), revisit this first.
+4. **`CALIBRATE` (`0x44000c`) is a guess, and is not currently reached.** It
+   returns success with a zeroed block, because the USB captures show no
+   separate calibration exchange - the register programming in
+   `egis_init_sensor` appears to be it.
+
+   The adapter traces now show why this has never mattered.
+   `SensorAdapterStartCapture` only calibrates when its first status check
+   comes back not-ready, and on hardware it logs:
+
+   ```
+   SensorAdapterStartCapture : called SensorAdapterQueryStatus(1) = 3
+   ```
+
+   3 is `WINBIO_SENSOR_READY`, so the `IOCTL_BIOMETRIC_CALIBRATE` branch is
+   skipped entirely. If the sensor ever reports `WINBIO_SENSOR_NOT_CALIBRATED`
+   (5) the branch fires and this guess starts to matter - revisit it then.
 
 5. **Capture works; the engine handoff is the frontier.** A real press is
    detected and the frame reaches the engine. `StartCapture`, the poll loop,
@@ -334,6 +353,20 @@ but false results rather than errors, and all three were on this path:
      is a ULONG at `+0x10` and the sample starts at `+0x14`. The old layout put
      the format pair at `+0x10`, so the adapter read `001b:0401` as a 67MB
      sample size and passed the GUID field as the sample - `E_INVALIDARG`.
+
+   The adapter's own traces confirm the first two from its side, which is worth
+   knowing as a way to check the third:
+
+   ```
+   SensorAdapterStartCapture : IOCTL_BIOMETRIC_GET_ATTRIBUTES ... bytesReturned = [1580]
+   SensorAdapterStartCapture : IOCTL_BIOMETRIC_CAPTURE_DATA   ... bytesReturned = [4]
+   SensorAdapterStartCapture : Call DeviceIoControl, GetLastError() = [997], result = [0]
+   <<< SensorAdapterStartCapture : ErrorCode [0x00000000]
+   ```
+
+   1580 is `0x62c`, the asserted `WINBIO_SENSOR_ATTRIBUTES` size; the 4 bytes
+   are the size probe answering with just the required length; 997 is
+   `ERROR_IO_PENDING`, the real capture going async as it should.
 
    Finger detection is the frame-variance threshold ported from the Python
    driver, and it works: on hardware an **idle platen reads 40-600 and a press
