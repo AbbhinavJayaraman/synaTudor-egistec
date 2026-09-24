@@ -97,8 +97,16 @@ runs unprivileged, so gdb works normally - no sudo, and none of the
 convention, because calling them the SysV way would not exercise the bug the
 formatter exists to fix.
 
-Before pushing, link-check: meson passes `-Wl,--no-undefined`, and a permissive
-link will hide dangling references. Two real breaks were caught that way.
+Before pushing, link-check. Note the meson files do **not** pass
+`-Wl,--no-undefined` (an earlier version of this file claimed they do), and
+`libtudor.so` is deliberately linked permissively so `bringup_nosensor` can
+interpose libusb. So check explicitly:
+
+```sh
+ldd -r build/libtudor/libtudor.so   # should report no undefined symbols
+```
+
+Two real breaks were caught by link-checking.
 
 Target platform is Arch/CachyOS. Deps: `base-devel meson ninja pkgconf libusb
 openssl libcap libseccomp glib2 glib2-devel dbus json-glib libgusb
@@ -173,28 +181,34 @@ geometry is the strongest evidence in this project so far.
 
 ## Current state
 
-Not working end to end yet, but there is no crash or hang left in the bring-up
-path, and the remaining failure is a single located gap.
+`tudor_open` succeeds on hardware. The CLI opens the device, lists records,
+starts an enrollment, and polls real frames off the sensor. What has *not*
+happened yet is an actual finger press, so nothing has been captured, enrolled
+or matched end to end.
 
 On hardware the CLI gets through:
 
 - both DLLs relinked, relocated, through `DllMain`, both interfaces queried
 - the sensor initialised (`egis_init_sensor`)
-- **all three `Attach` calls succeeding**
+- all three `Attach` calls succeeding
 - the engine reading its hardware key, deriving its paths, and running its own
   code, with its `[Driver]` log visible
-- `IOCTL 0x4427c0` logged as unimplemented - see thread 1
-- then, before the interface-size fix, a SIGSEGV in `sensor_adapter->PipelineInit`
+- `IOCTL 0x4427c0` logged as unimplemented - **and the run continues anyway**,
+  see thread 1
+- `QueryStatus` returning `WINBIO_SENSOR_READY`, so `tudor_open` returns true
+- `q` (query records) working, and a clean shutdown: deactivate, pipeline
+  cleanup, detach, both DLLs uninitialised
+- `e` (enroll) reaching `CreateEnrollment`, then `StartCapture`, then the
+  capture thread polling frames at 20/s
 
-Note that `tools/bringup_nosensor` diverges here: against the simulated sensor
-the **engine's** `Attach` fails with `0x8000ffff`, so it stops before
-`PipelineInit`. On real hardware `Attach` succeeds. Something in the simulated
-device's replies is wrong enough for the engine to reject it but not wrong enough
-to matter earlier - so treat bringup_nosensor as authoritative for crashes and
-hangs, and the hardware run as authoritative for whether a step actually
-succeeds. Narrowing that divergence would make the harness much more useful.
+**`tools/bringup_nosensor` no longer diverges** through `tudor_open` - it now
+reaches the same point as hardware and reports `tudor_open SUCCEEDED`. The
+earlier note here said the engine's `Attach` failed against the simulated
+sensor with `0x8000ffff`; that was the interface-size bug (`48e6aa8`), not the
+simulated device. Both are worth running: the harness is still the one you can
+put under gdb without sudo.
 
-### The two failures fixed before that (both reproducible without hardware)
+### Two earlier bring-up failures (both reproducible without hardware)
 
 **A SIGSEGV inside glibc, which looked like it happened during DLL load.** It
 was `wsprintfW`: a variadic `__winfnc` is `ms_abi`, so its arguments arrive in
@@ -247,38 +261,36 @@ but false results rather than errors, and all three were on this path:
 
 ## Open threads
 
-1. **`IOCTL 0x4427c0` - the current blocker.** The engine sends 208 bytes and
-   expects 208 back. This is not a sensor command: the driver's handler
+1. **`IOCTL 0x4427c0` - not a blocker after all.** The engine sends 208 bytes
+   and expects 208 back. This is not a sensor command: the driver's handler
    (`FUN_18001c8c0` -> `FUN_180006f98` in `EgisTouchFP0575.c`) is pure
    computation with no USB in it - a key derivation over a `"U2Vj"`-seeded
    constant, an HMAC check, a 32-byte random, and an ECDH-shaped exchange. It is
-   a **mutual-authentication / session-key handshake between the engine adapter
-   and the driver**, entirely inside the Windows software stack.
+   a mutual-authentication / session-key handshake between the engine adapter
+   and the driver, entirely inside the Windows software stack.
 
-   Returning success with a zeroed 208-byte reply was tried and does not work -
-   the engine verifies the response cryptographically, and `Attach` still fails
-   with `0x8000ffff`. So this has to be implemented for real. Two routes:
+   **Settled: it does not gate `Attach`.** Returning `STATUS_NOT_SUPPORTED`, the
+   engine's `Attach` still succeeds, `tudor_open` completes, and enrollment gets
+   as far as capture - on hardware and under `bringup_nosensor` alike. The older
+   note here claimed `Attach` failed with `0x8000ffff` without it; that failure
+   was really the interface-size bug, and this was misattributed. So it gates
+   at most Egis' own secure-image feature, which matches the Python driver
+   needing none of it.
 
-   - Port `FUN_180006f98` and the crypto helpers it calls
-     (`FUN_1800072b4` KDF, `FUN_180007b0c`/`FUN_1800074fc` MAC,
-     `FUN_180001ec0` exchange, `FUN_180002310`) plus the embedded constants at
-     `DAT_18003f888`/`DAT_18003f8b0`. Self-contained, but it is a protocol
-     reimplementation.
-   - Or map `EgisTouchFP0575.dll` as a PE image for this one function without
-     running its WDF `DllMain`, and call it directly. Cheaper if its state
-     dependencies are only the relocated statics - `FUN_180006f98` reads a
-     context through `param_1 + 8` that holds a 32-byte secret established
-     earlier, so check where that comes from first.
-
-   Worth settling before either: whether the engine can be attached at all
-   without this handshake, or whether it gates only Egis' own secure-image
-   feature. The Python driver in the sibling repo needs none of it.
+   Leave it unimplemented until something actually demands it. If that happens,
+   the two routes are still: port `FUN_180006f98` and its crypto helpers
+   (`FUN_1800072b4` KDF, `FUN_180007b0c`/`FUN_1800074fc` MAC, `FUN_180001ec0`
+   exchange, `FUN_180002310`) plus the constants at
+   `DAT_18003f888`/`DAT_18003f8b0`; or map `EgisTouchFP0575.dll` as a PE image
+   for this one function without running its WDF `DllMain` and call it directly.
 
 2. **`HKLM\SYSTEM\CurrentControlSet\Services\EgisFP\FPParameters`.** The engine
    reads `Optimization` and `SmartLearn` from it. This key is *not* in the INF,
    so no values have been invented - `reg.c` returns "not found", which is what
-   Windows would do unless something had set them. If `Attach` still fails,
-   guessing values here is the next experiment.
+   Windows would do unless something had set them. `Attach` and `tudor_open`
+   now both succeed with them missing, so this is no longer a suspect for
+   bring-up; revisit only if matching quality turns out poor, since
+   `Optimization` and `SmartLearn` sound like they tune exactly that.
 
 3. **Egis-private IOCTLs are unimplemented.** The driver's dispatch table
    (`EgisTouchFP0575.c` around the `0x442xxx` comparisons in the Ghidra dump)
@@ -296,13 +308,26 @@ but false results rather than errors, and all three were on this path:
    reports `WINBIO_SENSOR_NOT_CALIBRATED` (the sensor DLL has a string for
    exactly that), revisit this first.
 
-5. **Capture has never run.** `IOCTL_BIOMETRIC_CAPTURE_DATA` and the worker
-   thread in `egis.c` are written but untested. The geometry they use is now
-   settled (103 x 52, one 5356-byte transfer), and the read accumulates rather
-   than assuming one `libusb_bulk_transfer` returns the whole frame. Finger detection is a frame
-   variance threshold ported from the Python driver; the Windows driver has a
-   real finger-detect register path instead (the INF sets `FingerOnThreshold=6`
-   / `FingerOnThresholdLoose=2`), which has not been mapped.
+5. **Capture runs; a finger has never been pressed.** The worker thread in
+   `egis.c` now drives real hardware: `StartCapture` succeeds and the thread
+   polls 5356-byte frames at 20/s, which is the geometry settled below. What
+   remains untested is everything downstream of an actual touch - the
+   `WINBIO_CAPTURE_DATA` reply, the adapter wrapping it into an ANSI 381 BIR,
+   and the engine matching it. Press a finger during `e` and read the trace.
+
+   Getting there needed two fixes worth remembering, both in the shape of the
+   request rather than the image: `0x440014` is a **two-call size negotiation**
+   (the adapter probes with a 0x18-byte buffer and reads the required size as a
+   DWORD at offset 0), and `WINBIO_CAPTURE_PARAMETERS` is `0x20` bytes with
+   **no `WinBioType` field** - the phantom one shifted every field by four.
+
+   Finger detection is still the frame-variance threshold ported from the
+   Python driver, and it is now observable: the loop logs variance every ~1s at
+   `LOG_VERBOSE`. On this sensor an **idle platen reads 40-400 against a
+   threshold of 961**, so there is headroom but less than the numbers suggest -
+   the empty-platen reading is noisy, not flat. The Windows driver uses a real
+   finger-detect register path instead (the INF sets `FingerOnThreshold=6` /
+   `FingerOnThresholdLoose=2`), which has still not been mapped.
 
 6. **CLI interactions to watch.** `cli/src/main.c` runs its own
    `libusb_handle_events` thread while `egis.c` uses synchronous
@@ -310,6 +335,16 @@ but false results rather than errors, and all three were on this path:
    transfers hang rather than fail, suspect it. The CLI also calls
    `drop_root_priv()` *before* `tudor_init()`, so `libusb_detach_kernel_driver`
    runs unprivileged.
+
+7. **Five storage adapter entry points are still stubs.** `CreateDatabase`,
+   `EraseDatabase`, `OpenDatabase`, `CloseDatabase` and `GetDatabaseSize` in
+   `storage.c` log their own name and return a real WinBIO error. They used to
+   share one stub that `abort()`ed, which told you a storage call had been hit
+   but not which one, and killed the process before the trace could show what
+   the engine did next - that is how `GetDataFormat` stayed hidden. It is
+   implemented now (the INF declares the database format as the null GUID);
+   the other five have not been reached yet. If one shows up in the log,
+   implement it against `device->records_head`, which is the whole database.
 
 ## Reverse engineering material
 
