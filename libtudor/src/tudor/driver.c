@@ -127,6 +127,19 @@ bool tudor_init() {
         return false;
     }
 
+    //Worth logging, because the two adapters are different generations and Size
+    //is what says which methods actually exist - see WINBIO_HAS_FNC in
+    //internal.h. The sensor adapter is a 1.0 adapter with no pipeline
+    //init/activate methods at all.
+    log_info("Sensor adapter interface: version %u.%u type %u size 0x%zx (%zu methods)",
+        (unsigned) tudor_sensor_adapter->Version.MajorVersion, (unsigned) tudor_sensor_adapter->Version.MinorVersion,
+        (unsigned) tudor_sensor_adapter->Type, (size_t) tudor_sensor_adapter->Size,
+        ((size_t) tudor_sensor_adapter->Size - offsetof(WINBIO_SENSOR_INTERFACE, Attach)) / sizeof(void*));
+    log_info("Engine adapter interface: version %u.%u type %u size 0x%zx (%zu methods)",
+        (unsigned) tudor_engine_adapter->Version.MajorVersion, (unsigned) tudor_engine_adapter->Version.MinorVersion,
+        (unsigned) tudor_engine_adapter->Type, (size_t) tudor_engine_adapter->Size,
+        ((size_t) tudor_engine_adapter->Size - offsetof(WINBIO_ENGINE_INTERFACE, Attach)) / sizeof(void*));
+
 
     return true;
 }

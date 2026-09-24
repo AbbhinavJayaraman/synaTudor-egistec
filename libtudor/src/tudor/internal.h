@@ -61,6 +61,32 @@ extern struct windrv_dll tudor_windrv_dlls[];
 
 #define WINBIO_CALL_PIPELINE(fnc, ...) if((hres = fnc(__VA_ARGS__)) != ERROR_SUCCESS) { log_error("Error in WINBIO pipeline function '%s': 0x%x!", #fnc, hres); return false; }
 
+//A WinBIO adapter states in its own Size field how much of the interface struct
+//it actually implements, and the two Egis adapters are different generations:
+//
+//  EgisTouchFPSensor0575  Version 1.0  Size 0x98  = 15 methods, last is ControlUnitPrivileged
+//  EgisTouchFPEngine0575  Version 3.0  Size 0x168 = 41 methods
+//
+//So the sensor adapter has no PipelineInit, PipelineCleanup, Activate or
+//Deactivate. Those fields sit past the end of its struct, where reading them
+//picks up whatever follows the vtable in .rdata - calling that is a jump to a
+//garbage address, which is exactly the SIGSEGV seen right after "Initializing
+//pipeline interfaces...". Windows does not call them on a 1.0 adapter either, so
+//skipping them is correct rather than a workaround.
+//
+//Every other method device.c uses is within the sensor adapter's first 15.
+#define WINBIO_HAS_FNC(iface, fnc) \
+    (offsetof(__typeof__(*(iface)), fnc) + sizeof((iface)->fnc) <= (size_t) (iface)->Size && (iface)->fnc != NULL)
+
+//Calls a method that an older adapter version may not publish at all.
+#define WINBIO_CALL_PIPELINE_OPT(iface, fnc, ...) { \
+    if(WINBIO_HAS_FNC(iface, fnc)) { \
+        WINBIO_CALL_PIPELINE((iface)->fnc, __VA_ARGS__) \
+    } else { \
+        log_debug("Adapter doesn't publish " #fnc " (interface size 0x%zx) - skipping", (size_t) (iface)->Size); \
+    } \
+}
+
 // External declarations for global pointers
 extern struct windrv_dll *tudor_adapter_dll, *tudor_engine_dll;
 extern WINBIO_SENSOR_INTERFACE *tudor_sensor_adapter;

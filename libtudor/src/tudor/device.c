@@ -88,9 +88,9 @@ bool tudor_open(struct tudor_device *device, libusb_device_handle *usb_dev, stru
     WINBIO_CALL_PIPELINE(tudor_storage_adapter->Attach, device->pipeline);
 
     log_debug("Initializing pipeline interfaces...");
-    WINBIO_CALL_PIPELINE(tudor_sensor_adapter->PipelineInit, device->pipeline);
-    WINBIO_CALL_PIPELINE(tudor_engine_adapter->PipelineInit, device->pipeline);
-    WINBIO_CALL_PIPELINE(tudor_storage_adapter->PipelineInit, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_sensor_adapter, PipelineInit, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_engine_adapter, PipelineInit, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_storage_adapter, PipelineInit, device->pipeline);
 
     //Reset the sensor
     log_debug("Resetting sensor...");
@@ -98,9 +98,9 @@ bool tudor_open(struct tudor_device *device, libusb_device_handle *usb_dev, stru
 
     //Activate the pipeline
     log_debug("Activating pipeline...");
-    WINBIO_CALL_PIPELINE(tudor_sensor_adapter->Activate, device->pipeline);
-    WINBIO_CALL_PIPELINE(tudor_engine_adapter->Activate, device->pipeline);
-    WINBIO_CALL_PIPELINE(tudor_storage_adapter->Activate, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_sensor_adapter, Activate, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_engine_adapter, Activate, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_storage_adapter, Activate, device->pipeline);
 
     //Check the sensor status
     log_debug("Checking sensor status...");
@@ -121,15 +121,15 @@ bool tudor_close(struct tudor_device *device) {
 
     //Deactivate the pipeline
     log_debug("Deactivating pipeline...");
-    WINBIO_CALL_PIPELINE(tudor_sensor_adapter->Deactivate, device->pipeline);
-    WINBIO_CALL_PIPELINE(tudor_engine_adapter->Deactivate, device->pipeline);
-    WINBIO_CALL_PIPELINE(tudor_storage_adapter->Deactivate, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_sensor_adapter, Deactivate, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_engine_adapter, Deactivate, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_storage_adapter, Deactivate, device->pipeline);
 
     //Uninitialize the pipeline
     log_debug("Uninitializing pipeline interfaces...");
-    WINBIO_CALL_PIPELINE(tudor_sensor_adapter->PipelineCleanup, device->pipeline);
-    WINBIO_CALL_PIPELINE(tudor_engine_adapter->PipelineCleanup, device->pipeline);
-    WINBIO_CALL_PIPELINE(tudor_storage_adapter->PipelineCleanup, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_sensor_adapter, PipelineCleanup, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_engine_adapter, PipelineCleanup, device->pipeline);
+    WINBIO_CALL_PIPELINE_OPT(tudor_storage_adapter, PipelineCleanup, device->pipeline);
 
     log_debug("Detaching interfaces from pipeline...");
     WINBIO_CALL_PIPELINE(tudor_sensor_adapter->Detach, device->pipeline);

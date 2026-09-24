@@ -19,3 +19,12 @@ foreach t : ['test_format', 'test_convert']
     )
     test(t, exe)
 endforeach
+
+# Needs libtudor's private headers for the WinBIO interface layout, since the
+# whole point is to check that layout against the shipped DLLs.
+test('test_adapter_iface', executable('test_adapter_iface', 'test_adapter_iface.c',
+    dependencies: [libtudor_dep, libcrypto_dep, libusb_dep],
+    include_directories: include_directories('../libtudor/src'),
+    c_args: ['-D_GNU_SOURCE'],
+    install: false
+))
