@@ -123,20 +123,49 @@ without a password prompt during a session. Two gotchas hit already:
   registry, reproduce it under `tools/bringup_nosensor` instead, which needs no
   sudo at all.
 
+## The two adapters are different WinBIO generations
+
+This matters everywhere, so it is worth knowing up front. Each adapter publishes
+how much of the interface struct it implements in its own `Size` field:
+
+| Adapter | Version | `Size` | Methods | Last published method |
+| --- | --- | --- | --- | --- |
+| `EgisTouchFPSensor0575` | 1.0 | `0x98` | 15 | `ControlUnitPrivileged` |
+| `EgisTouchFPEngine0575` | 3.0 | `0x168` | 41 | - |
+
+So the **sensor adapter has no `PipelineInit`, `PipelineCleanup`, `Activate` or
+`Deactivate`.** Reading those fields walks past the end of its struct into
+whatever follows the vtable in `.rdata`; calling the result is a jump to a
+garbage address. Windows does not call them on a 1.0 adapter either, so
+`WINBIO_CALL_PIPELINE_OPT` (internal.h) checks the published `Size` first and
+skips. `tudor_init` logs both interfaces' version and size on every run, and
+`tools/test_adapter_iface` pins the layout against the shipped DLLs.
+
+Everything else `device.c` calls on the sensor adapter is inside its first 15.
+If you add a new sensor-adapter call, check it against that table.
+
 ## Current state
 
-Not working end to end yet, but the segfault and the hang are gone and the
-failure is now a clean, precisely located one.
+Not working end to end yet, but there is no crash or hang left in the bring-up
+path, and the remaining failure is a single located gap.
 
-`tools/bringup_nosensor` (and the CLI) get through:
+On hardware the CLI gets through:
 
 - both DLLs relinked, relocated, through `DllMain`, both interfaces queried
 - the sensor initialised (`egis_init_sensor`)
-- `sensor_adapter->Attach` succeeding
+- **all three `Attach` calls succeeding**
 - the engine reading its hardware key, deriving its paths, and running its own
   code, with its `[Driver]` log visible
-- then `engine_adapter->Attach` failing with `0x8000ffff` (`E_UNEXPECTED`),
-  because the engine's `IOCTL 0x4427c0` is not implemented - see thread 1.
+- `IOCTL 0x4427c0` logged as unimplemented - see thread 1
+- then, before the interface-size fix, a SIGSEGV in `sensor_adapter->PipelineInit`
+
+Note that `tools/bringup_nosensor` diverges here: against the simulated sensor
+the **engine's** `Attach` fails with `0x8000ffff`, so it stops before
+`PipelineInit`. On real hardware `Attach` succeeds. Something in the simulated
+device's replies is wrong enough for the engine to reject it but not wrong enough
+to matter earlier - so treat bringup_nosensor as authoritative for crashes and
+hangs, and the hardware run as authoritative for whether a step actually
+succeeds. Narrowing that divergence would make the harness much more useful.
 
 ### The two failures fixed before that (both reproducible without hardware)
 
