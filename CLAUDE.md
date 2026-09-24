@@ -144,6 +144,37 @@ skips. `tudor_init` logs both interfaces' version and size on every run, and
 Everything else `device.c` calls on the sensor adapter is inside its first 15.
 If you add a new sensor-adapter call, check it against that table.
 
+## The engine picks its sensor class from ModelName
+
+`FUN_18001ad60` in `EgisTouchFPEngine0575` searches the `ModelName` field of
+`WINBIO_SENSOR_ATTRIBUTES` (at `+0x21c`) with `StrStrW` and instantiates a
+different sensor class, each with its own image geometry, from
+`FUN_18001c070(obj, width, height)`:
+
+| ModelName contains | Class | Geometry |
+| --- | --- | --- |
+| `ET310` | `CET310Sensor` | 144 x 64 |
+| `ET320` | `CET320Sensor` | 114 x 57 |
+| `ET510` | `CET510Sensor` | **103 x 52** |
+| none of them | - | 128 x 128 default |
+
+The EH575 is an **ET510**, and `egis_ioctl_get_attributes` reports
+`u"Fingerprint ET510"` - the string the Windows UMDF driver itself uses, at
+offset `0x3ea10` of `EgisTouchFP0575.dll`, alongside `"EgisTec."` and the
+firmware string `"FW575"`. Do not change it to a friendlier name: anything not
+containing one of those three tokens silently selects the 128 x 128 default.
+
+If `FUN_18001ad60` returns NULL the engine's `Attach` returns `0x8000ffff`
+immediately, so this is on the critical path.
+
+**Open question from this: the engine's ET510 class wants 103 x 52 = 5356 bytes,
+but a frame transfer is 5120 bytes and yields 49 full rows (49 x 103 = 5047
+after the 73-byte offset).** 52 rows do not fit in one transfer. So either the
+driver accumulates more than one transfer per frame, or the offset is not what a
+single frame looks like, or it pads. Do not "fix" the capture constants to make
+the arithmetic work - they come from the captures. Settle it against
+`python-egistec-eh575/wireshark/` first. This is thread 7.
+
 ## Current state
 
 Not working end to end yet, but there is no crash or hang left in the bring-up
@@ -274,6 +305,10 @@ but false results rather than errors, and all three were on this path:
    variance threshold ported from the Python driver; the Windows driver has a
    real finger-detect register path instead (the INF sets `FingerOnThreshold=6`
    / `FingerOnThresholdLoose=2`), which has not been mapped.
+
+7. **ET510 geometry vs. frame size** - see the section above. The engine expects
+   103 x 52; capture yields 103 x 49. Resolve from the USB captures, not by
+   editing constants.
 
 6. **CLI interactions to watch.** `cli/src/main.c` runs its own
    `libusb_handle_events` thread while `egis.c` uses synchronous

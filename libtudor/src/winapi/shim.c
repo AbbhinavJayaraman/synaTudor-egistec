@@ -61,7 +61,24 @@ __winfnc DWORD SizeofResource(HANDLE hModule, void *hResInfo) { return 0; }
 WINAPI(SizeofResource)
 
 // --- Strings / Path / Locale ---
-__winfnc char16_t* StrStrIW(const char16_t *pszFirst, const char16_t *pszSrch) { return NULL; }
+//Case-insensitive counterpart, same problem as StrStrW below.
+__winfnc char16_t* StrStrIW(const char16_t *pszFirst, const char16_t *pszSrch) {
+    if(!pszFirst || !pszSrch) return NULL;
+    if(!*pszSrch) return (char16_t*) pszFirst;
+
+    for(const char16_t *p = pszFirst; *p; p++) {
+        const char16_t *a = p, *b = pszSrch;
+        while(*a && *b) {
+            char16_t ca = *a, cb = *b;
+            if(ca >= u'A' && ca <= u'Z') ca = (char16_t) (ca - u'A' + u'a');
+            if(cb >= u'A' && cb <= u'Z') cb = (char16_t) (cb - u'A' + u'a');
+            if(ca != cb) break;
+            a++; b++;
+        }
+        if(!*b) return (char16_t*) p;
+    }
+    return NULL;
+}
 WINAPI(StrStrIW)
 
 __winfnc BOOL PathFileExistsW(const char16_t *pszPath) { return FALSE; }
@@ -149,7 +166,21 @@ __winfnc int StrCmpNIW(const char16_t *s1, const char16_t *s2, int n) {
 }
 WINAPI(StrCmpNIW)
 
-__winfnc char16_t* StrStrW(const char16_t *pszFirst, const char16_t *pszSrch) { return NULL; }
+//These returned NULL - "not found" - for every input. That is not a harmless
+//failure here: the engine adapter picks its sensor class by searching ModelName
+//for "ET310"/"ET320"/"ET510" (FUN_18001ad60), so a NULL from StrStrW sent every
+//sensor down the default 128x128 branch no matter what the adapter reported.
+__winfnc char16_t* StrStrW(const char16_t *pszFirst, const char16_t *pszSrch) {
+    if(!pszFirst || !pszSrch) return NULL;
+    if(!*pszSrch) return (char16_t*) pszFirst;
+
+    for(const char16_t *p = pszFirst; *p; p++) {
+        const char16_t *a = p, *b = pszSrch;
+        while(*a && *b && *a == *b) { a++; b++; }
+        if(!*b) return (char16_t*) p;
+    }
+    return NULL;
+}
 WINAPI(StrStrW)
 
 __winfnc int CompareStringEx(const char16_t *lpLocaleName, DWORD dwCmpFlags, const char16_t *lpString1, int cchCount1, const char16_t *lpString2, int cchCount2, void *lpVersionInformation, void *lpReserved, LPARAM lParam) { return 0; }

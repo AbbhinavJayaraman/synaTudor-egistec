@@ -247,10 +247,21 @@ static NTSTATUS egis_ioctl_get_attributes(struct egis_device *dev, void *out_buf
     attr->WinBioCapabilities = WINBIO_CAPABILITY_SENSOR | WINBIO_CAPABILITY_MATCHING | WINBIO_CAPABILITY_PROCESSING;
     attr->FirmwareVersion = (WINBIO_VERSION) { .MajorVersion = 3, .MinorVersion = 7 };
 
-    //The engine adapter reads the model name out of this buffer, so it has to
-    //be a real NUL-terminated UTF-16 string rather than zeroes.
+    //The engine adapter picks its sensor class by searching this ModelName for
+    //"ET310"/"ET320"/"ET510" (FUN_18001ad60 in EgisTouchFPEngine0575), and each
+    //class carries its own image geometry:
+    //
+    //    ET310 -> 144 x 64     ET320 -> 114 x 57     ET510 -> 103 x 52
+    //    no match -> a 128 x 128 default
+    //
+    //The EH575 is an ET510: 103 matches the width derived from the USB captures,
+    //and the string below is the one the Windows UMDF driver itself reports -
+    //"Fingerprint ET510" at offset 0x3ea10 of EgisTouchFP0575.dll, next to
+    //"EgisTec." and the "FW575" firmware string. It is not invented; an earlier
+    //guess of "EgisTec EH575" matched none of the three and silently selected the
+    //128 x 128 default.
     static const char16_t manufacturer[] = u"Egis Technology Inc.";
-    static const char16_t model[] = u"EgisTec EH575";
+    static const char16_t model[] = u"Fingerprint ET510";
     static const char16_t serial[] = u"0000";
     memcpy(attr->ManufacturerName, manufacturer, sizeof(manufacturer));
     memcpy(attr->ModelName, model, sizeof(model));
