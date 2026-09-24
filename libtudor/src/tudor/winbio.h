@@ -405,16 +405,48 @@ _Static_assert(offsetof(WINBIO_CAPTURE_PARAMETERS, VendorFormat) == 0x0c, "Vendo
 _Static_assert(offsetof(WINBIO_CAPTURE_PARAMETERS, Flags) == 0x1c, "Flags must sit at +0x1c");
 _Static_assert(sizeof(WINBIO_CAPTURE_PARAMETERS) == 0x20, "WINBIO_CAPTURE_PARAMETERS must be exactly 0x20 bytes");
 
+//The reply the driver writes for IOCTL 0x440014. Like WINBIO_CAPTURE_PARAMETERS
+//above, this is *not* the documented WINBIO_CAPTURE_DATA - there are no Format
+//or VendorFormat fields. Every offset below is read directly out of the two
+//adapter functions that consume this buffer.
+//
+//SensorAdapterFinishCapture (FUN_180002130) reads:
+//
+//    if(CaptureBuffer == 0 || ctx->CaptureBufferSize < 0x18 || *(int*)(buf+4) != 0) fail;
+//    switch(*(uint*)(buf + 8)) { case 1: break; case 2: ... }   // 1 = ACCEPT, the silent success
+//    *rejectDetail = *(undefined4*)(buf + 0xc);
+//    return *(uint*)(buf + 4);
+//
+//so +0x04 is the HRESULT, +0x08 the WINBIO_SENSOR_* status and +0x0c the
+//reject detail. SensorAdapterPushDataToEngine (FUN_1800028e0) then does:
+//
+//    if(ctx->CaptureBufferSize > 0x17 && *(int*)(buf + 0x10) != 0 && *(int*)(buf + 8) == 1)
+//        engine->AcceptSampleData(pipeline, buf + 0x14, *(int*)(buf + 0x10), purpose, rejectDetail);
+//
+//- the engine method at EngineInterface+0x60, which is index 8, AcceptSampleData.
+//So the sample size is a **ULONG at +0x10** and the sample itself starts at
+//**+0x14**, immediately after it.
+//
+//The earlier reading put a WINBIO_REGISTERED_FORMAT at +0x10 and a GUID at
+//+0x14, with the size pushed out to +0x28. That made the adapter read the
+//packed format pair 001b:0401 as the sample size - 0x0401001b, i.e. 67MB, which
+//is non-zero so it passed the check - and hand the engine a pointer to the
+//VendorFormat field as the sample. The engine rejected it with E_INVALIDARG
+//(0x80070057), which is what "Error pushing sensor data to engine" was.
 typedef struct {
-    ULONG PayloadSize;
-    HRESULT WinBioHresult;
-    ULONG SensorStatus;
-    ULONG RejectDetail;
-    WINBIO_REGISTERED_FORMAT Format;
-    GUID VendorFormat;
-    SIZE_T CaptureBufferSize;
-    UCHAR CaptureBuffer[1];
+    ULONG PayloadSize;          //+0x00 - also the size the StartCapture probe reads
+    HRESULT WinBioHresult;      //+0x04
+    ULONG SensorStatus;         //+0x08 - WINBIO_SENSOR_ACCEPT on a good frame
+    ULONG RejectDetail;         //+0x0c
+    ULONG CaptureBufferSize;    //+0x10 - the sample size the engine is given
+    UCHAR CaptureBuffer[1];     //+0x14
 } WINBIO_CAPTURE_DATA;
+
+_Static_assert(offsetof(WINBIO_CAPTURE_DATA, WinBioHresult) == 0x04, "WinBioHresult must sit at +0x04");
+_Static_assert(offsetof(WINBIO_CAPTURE_DATA, SensorStatus) == 0x08, "SensorStatus must sit at +0x08");
+_Static_assert(offsetof(WINBIO_CAPTURE_DATA, RejectDetail) == 0x0c, "RejectDetail must sit at +0x0c");
+_Static_assert(offsetof(WINBIO_CAPTURE_DATA, CaptureBufferSize) == 0x10, "CaptureBufferSize must sit at +0x10");
+_Static_assert(offsetof(WINBIO_CAPTURE_DATA, CaptureBuffer) == 0x14, "CaptureBuffer must start at +0x14");
 
 typedef union {
     ULONG Null;

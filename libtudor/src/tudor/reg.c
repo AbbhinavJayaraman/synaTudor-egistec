@@ -60,6 +60,39 @@ static const struct reg_dword device_values[] = {
     { "WppRecorder_TraceLevel", 4 },
 };
 
+//Both adapters carry a full set of entry/exit traces - ">>> SensorAdapterAttach",
+//"<<< EngineAdapterAcceptSampleData : hr = [0x%08X], Purpose = %d" and so on -
+//and emit them through OutputDebugStringA, which libtudor already prints as
+//[Driver]. They are gated, and the gate is this registry key. From
+//FUN_180001000 in EgisTouchFPSensor0575 (the same code is in the engine):
+//
+//    RegOpenKeyA(HKLM, "SOFTWARE\\EgisSDKDBG", &k);
+//    RegQueryValueExA(k, "EnableBlock",  NULL, &t, &DAT_180018664, &len);
+//    RegQueryValueExA(k, "DisplayFlag ", NULL, &t, &DAT_180018668, &len);
+//
+//and the trace function itself (FUN_1800010e0) then does:
+//
+//    if((DAT_180018664 & component) != 0 && fmt != NULL) { ...
+//        if(0 < DAT_180018668) OutputDebugStringA(buf);
+//        if(1 < DAT_180018668) ...                      // also writes a file
+//
+//where component is 1 for EngineAdapter, 2 for SensorAdapter and anything else
+//for WBF. RegOpenKeyExA in the shim always succeeds, so the key "existing" was
+//never the problem - the two values simply read as missing, leaving the mask at
+//zero and every trace suppressed.
+//
+//Note the **trailing space** in "DisplayFlag ". That is how the DLL spells it,
+//so that is what has to match; without it the value is never found.
+//
+//DisplayFlag is 1, not 2: at 2 and above the DLL also opens a log file of its
+//own, which is not something we want it doing.
+#define EGIS_SDK_DBG_KEY "HKEY_LOCAL_MACHINE\\SOFTWARE\\EgisSDKDBG"
+
+static const struct reg_dword egis_sdk_dbg_values[] = {
+    { "EnableBlock", 0xffffffff },  //every component
+    { "DisplayFlag ", 1 },          //OutputDebugString only - see above
+};
+
 #define REG_KEY(k, v) { .key = (k), .values = (v), .num_values = sizeof(v) / sizeof((v)[0]) }
 
 static const struct reg_key reg_keys[] = {
@@ -133,6 +166,17 @@ bool tudor_reg_handler(void *ctx, void *ctx_obj, const char *key_name, const cha
     if(!buf_size || !key_name || !val_name) return false;
 
     log_debug("REG: Read Key='%s' Val='%s'", key_name, val_name);
+
+    //Only answer the adapters' debug gate when traces were actually asked for
+    //(-t), since turning it on makes both of them narrate every call.
+    if(strcasecmp(key_name, EGIS_SDK_DBG_KEY) == 0) {
+        if(!tudor_log_traces) return false;
+        for(size_t j = 0; j < sizeof(egis_sdk_dbg_values) / sizeof(egis_sdk_dbg_values[0]); j++) {
+            if(strcmp(val_name, egis_sdk_dbg_values[j].name) != 0) continue;
+            return put_dword(egis_sdk_dbg_values[j].value, buf, buf_size, val_type);
+        }
+        return false;
+    }
 
     //The hardware-key path is matched by shape, not by name - see above.
     const struct reg_dword *pattern_values = NULL;

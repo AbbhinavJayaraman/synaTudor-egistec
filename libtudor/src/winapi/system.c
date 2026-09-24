@@ -92,10 +92,9 @@ WINAPI(ConvertStringSecurityDescriptorToSecurityDescriptorW)
 /* --- ADD THIS TO THE END OF system.c --- */
 
 // --- Registry Stubs ---
-__winfnc LSTATUS RegOpenKeyA(HANDLE hKey, const char *lpSubKey, HANDLE *phkResult) {
-    return 2; // ERROR_FILE_NOT_FOUND
-}
-WINAPI(RegOpenKeyA)
+//RegOpenKeyA lives in reg.c, with the rest of the registry - it used to be a
+//stub here returning ERROR_FILE_NOT_FOUND, which silently disabled both
+//adapters' entire trace output. See the comment there.
 
 __winfnc LSTATUS RegQueryInfoKeyA(HANDLE hKey, char *lpClass, DWORD *lpcchClass, DWORD *lpReserved, DWORD *lpcSubKeys, DWORD *lpcbMaxSubKeyLen, DWORD *lpcbMaxClassLen, DWORD *lpcValues, DWORD *lpcbMaxValueNameLen, DWORD *lpcbMaxValueLen, DWORD *lpcbSecurityDescriptor, void *lpftLastWriteTime) {
     return 2; // ERROR_FILE_NOT_FOUND

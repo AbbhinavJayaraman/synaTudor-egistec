@@ -81,7 +81,10 @@ void cli_main_loop(struct tudor_device *device) {
                     goto cmdend;
                 }
 
-                puts("Put your finger on the sensor");
+                //The driver announces the real phases (lift first, then press) as it reaches
+                //them - see egis_capture_thread. Saying "put your finger on" here pre-empted
+                //that and contradicted the clear-wait the capture actually starts with.
+                puts("Starting capture - follow the prompts below.");
                 while(true) {
                     //Update enrollment
                     bool is_done;
@@ -131,7 +134,10 @@ void cli_main_loop(struct tudor_device *device) {
                 bool matches;
                 while(true) {
                     //Capture and verify sample
-                    puts("Put your finger on the sensor");
+                    //The driver announces the real phases (lift first, then press) as it reaches
+                //them - see egis_capture_thread. Saying "put your finger on" here pre-empted
+                //that and contradicted the clear-wait the capture actually starts with.
+                puts("Starting capture - follow the prompts below.");
 
                     bool retry;
                     tudor_async_res_t async_res = NULL;
@@ -158,7 +164,10 @@ void cli_main_loop(struct tudor_device *device) {
 
                 while(true) {
                     //Capture and identify sample
-                    puts("Put your finger on the sensor");
+                    //The driver announces the real phases (lift first, then press) as it reaches
+                //them - see egis_capture_thread. Saying "put your finger on" here pre-empted
+                //that and contradicted the clear-wait the capture actually starts with.
+                puts("Starting capture - follow the prompts below.");
                     bool retry;
                     tudor_async_res_t async_res = NULL;
                     if(!tudor_identify(device, &retry, &found_match, &match_guid, &match_finger, &async_res) || !tudor_wait_async(async_res)) {

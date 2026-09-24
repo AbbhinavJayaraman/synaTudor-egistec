@@ -145,6 +145,22 @@ __winfnc LONG RegOpenKeyExA(HANDLE hkey, const char *subkey, DWORD opts, DWORD s
 }
 WINAPI(RegOpenKeyExA)
 
+//RegOpenKey is just RegOpenKeyEx with no options and no access mask - that is
+//the actual relationship on Windows, where the former forwards to the latter.
+//
+//This was a stub in system.c returning ERROR_FILE_NOT_FOUND, and it cost the
+//whole project the adapters' own logging. Both DLLs configure their tracing in
+//FUN_180001000 by opening HKLM\SOFTWARE\EgisSDKDBG *with this call* and
+//reading EnableBlock/"DisplayFlag " out of it; on ERROR_FILE_NOT_FOUND they
+//give up and leave the trace mask at zero, so every ">>> SensorAdapterAttach"
+//and "<<< EngineAdapterAcceptSampleData : hr = [0x%08X]" the DLLs contain was
+//discarded before it was ever formatted. Exactly the failure mode CLAUDE.md
+//warns about: a stub returning a plausible-looking constant.
+__winfnc LONG RegOpenKeyA(HANDLE hkey, const char *subkey, HANDLE *out) {
+    return RegOpenKeyExA(hkey, subkey, 0, 0, out);
+}
+WINAPI(RegOpenKeyA)
+
 __winfnc LONG RegOpenKeyExW(HANDLE hkey, const char16_t *subkey, DWORD opts, DWORD sam, HANDLE *out) {
     if(!subkey) {
         *out = hkey;

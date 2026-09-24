@@ -424,9 +424,14 @@ static void *egis_capture_thread(void *arg) {
     uint8_t img[EGIS_IMG_BYTES];
 
     //Wait for the previous finger to come off, so a single press cannot be
-    //consumed as two captures.
+    //consumed as two captures. The caller has usually already printed "put your
+    //finger on the sensor" by now, which is the opposite of what this phase
+    //wants - so say which phase we are actually in, at a level that is on by
+    //default. Without this the two phases are indistinguishable and a press
+    //made during the clear-wait looks like it was simply ignored.
     int clear_streak = 0;
     unsigned polls = 0;
+    bool announced_lift = false;
     while(clear_streak < 2) {
         cant_fail_ret(pthread_mutex_lock(&dev->cap_lock));
         bool cancelled = dev->cap_cancel;
@@ -441,12 +446,22 @@ static void *egis_capture_thread(void *arg) {
         }
 
         if(var < EGIS_TOUCH_VARIANCE) clear_streak++;
-        else clear_streak = 0;
+        else {
+            clear_streak = 0;
+            //Only worth saying if something is actually on the platen; an
+            //already-clear sensor passes through this phase in ~100ms.
+            if(!announced_lift) {
+                log_info(">>> Sensor is not clear - take your finger OFF the sensor first");
+                announced_lift = true;
+            }
+        }
 
         usleep(EGIS_POLL_INTERVAL_US);
     }
 
-    //Now wait for a finger.
+    //Now wait for a finger. This is the point at which a press is actually
+    //consumed, so it is the point worth announcing.
+    log_info(">>> Now press your finger on the sensor and hold it there");
     for(;;) {
         cant_fail_ret(pthread_mutex_lock(&dev->cap_lock));
         bool cancelled = dev->cap_cancel;
@@ -480,8 +495,6 @@ static void *egis_capture_thread(void *arg) {
         data->WinBioHresult = ERROR_SUCCESS;
         data->SensorStatus = WINBIO_SENSOR_ACCEPT;
         data->RejectDetail = 0;
-        data->Format.Owner = WINBIO_ANSI_381_FORMAT_OWNER;
-        data->Format.Type = WINBIO_ANSI_381_FORMAT_TYPE;
         data->CaptureBufferSize = EGIS_IMG_BYTES;
         memcpy(data->CaptureBuffer, img, EGIS_IMG_BYTES);
 
